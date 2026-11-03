@@ -1,9 +1,9 @@
 # LearnedPlacement
 
 A local CPU simulator for resource, placement, checkpoint and recovery planning.
-**Pilot v5 trains and compares RL plan selectors**, with a simulation horizon
-increased from 8× to **32×** reference time. No Ray, GPU, cloud or Z3 is required.
-The planner networks train; the distributed training workload remains simulated.
+**Pilot v6 reuses frozen v5 RL policies to guide search**, compares equal planning
+budgets and adds 32/64/96-machine pools. No Ray, cloud, GPU or solver is required.
+The workload is simulated; no new neural training occurs in v6.
 
 ## Run locally
 
@@ -14,20 +14,19 @@ python -m pip install -e '.[notebook,learning]'
 python -m jupyter lab notebooks/PlacementPilot.ipynb
 ```
 
-Python 3.10+ is required. For a fresh checkout, create `.venv` with
-`python3 -m venv .venv` first. Restart the notebook kernel after pulling.
-The new output is **`results/pilot_v5`**. Only Run/resume starts work.
+Python 3.10+ is required. Restart the kernel after pulling. Set `SOURCE_RUN` to
+your completed v5 results folder (the analysis ZIP has no weights). Start with
+`STAGE="small"`, `SPLIT="validation"`, then use `STAGE="scale"`. New output names
+keep previous results intact. There is **no mandatory 30-minute limit**:
+`MAX_MINUTES=None` runs until completion. Four CPU case workers are the notebook
+default; worker count is editable. Rerun unchanged to resume.
 
-```bash
-python -m learnedplacement.learning_runner --config configs/pilot_v5.json --output results/pilot_v5 --max-minutes 30
-python -m learnedplacement.learning_runner --output results/pilot_v5 --status
-```
-
-Training and evaluation pause after 30 real minutes per invocation, with saved
-weights, optimizer states and simulation progress. Rerun unchanged to resume.
-The complete experiment may require several invocations. Config/source/NumPy
-changes require a new run directory. The notebook provides a smaller first-run
-option. Deadlines and budgets are unchanged despite the longer horizon.
+See [the v6 design and limitations](docs/PILOT_V6.md) for methods, budgets,
+parallel timing, fresh splits and export details. The compact `.analysis.zip`
+contains only analysis inputs; raw data and frozen models remain local.
+`notebooks/PlacementPilotV5.ipynb` preserves the earlier training workflow. The
+v5 runner also accepts `max_minutes=None` or a value above 30 when called in
+Python; its archived notebook still explicitly requests 30 minutes by default.
 
 ## What v5 compares
 

@@ -168,7 +168,9 @@ def make_case(config, active_nodes, regime, instance, profile=None):
                       deadline_factor=profile.get("deadline_factor", config["deadline_factor"]),
                       cost_budget_factor=profile.get("cost_budget_factor", config["cost_budget_factor"]))
     rng = random.Random(seed_for(config["seed"], active_nodes, regime, instance))
-    count = active_nodes + active_nodes // 2
+    count = config.get("available_nodes", {}).get(str(active_nodes), active_nodes + active_nodes // 2)
+    if type(count) is not int or count < active_nodes:
+        raise ValueError("Available machines must cover the reference active count")
     nodes = []
     for i in range(count):
         risky = i % 2 == 1

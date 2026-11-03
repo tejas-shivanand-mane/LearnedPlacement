@@ -112,9 +112,9 @@ def build_summary(output):
 
 
 def run(config=None, output='results/pilot_v4', max_minutes=30, config_path=None,
-        prepare_fn=None, plan_fn=None, before_evaluate=None, trace_namespace='v4'):
-    if not isinstance(max_minutes,(int,float)) or not 0 < max_minutes <= 30:
-        raise ValueError('max_minutes must be in (0,30]')
+        prepare_fn=None, plan_fn=None, before_evaluate=None, trace_namespace='v4', reuse_evaluations=False):
+    if max_minutes is not None and (not isinstance(max_minutes,(int,float)) or not math.isfinite(max_minutes) or max_minutes <= 0):
+        raise ValueError('max_minutes must be positive or None (unlimited)')
     prepare_fn = prepare_fn or prepare
     plan_fn = plan_fn or plan
     cfg = config if config is not None else read_json(config_path or ROOT/'configs/pilot_v4.json')
@@ -123,7 +123,7 @@ def run(config=None, output='results/pilot_v4', max_minutes=30, config_path=None
     try: fd = os.open(lock,os.O_CREAT|os.O_EXCL|os.O_WRONLY)
     except FileExistsError: raise RuntimeError('Run is locked. Confirm old runner stopped before removing .run.lock.') from None
     os.write(fd,str(os.getpid()).encode()); os.close(fd)
-    stop_at = time.monotonic()+60*max_minutes
+    stop_at = None if max_minutes is None else time.monotonic()+60*max_minutes
     current = {}
     prepared = False
     try:
@@ -157,17 +157,33 @@ def run(config=None, output='results/pilot_v4', max_minutes=30, config_path=None
                 healthy = read_json(path)
                 path = d/f'{method}.observations.json'
                 rows = read_json(path) if path.exists() else []
+                cache_path = d/'evaluation_cache'/(hashlib.sha256(json.dumps(p.to_dict(),sort_keys=True).encode()).hexdigest()+'.json')
+                shared_rows = read_json(cache_path) if reuse_evaluations and cache_path.exists() else []
+                if reuse_evaluations and len(rows) > len(shared_rows):
+                    if rows[:len(shared_rows)] != shared_rows: raise ValueError('Evaluation cache content mismatch')
+                    shared_rows = list(rows)  # recover after a forced stop between file saves
                 print(f'{cid}: evaluating {method} ({len(rows)}/{cfg["evaluation_traces"]})',flush=True)
                 try:
                     for i in range(len(rows),cfg['evaluation_traces']):
                         check_budget(stop_at)
                         seed = seed_for(cfg['seed'],c.trace_key,trace_namespace+'-evaluation',i)
                         if i not in eval_cache: eval_cache[i] = generate_trace(s,seed,stop_at)
-                        row = simulate(s,p,eval_cache[i],stop_at)
-                        rows.append(dict(trace_index=i,trace_seed=seed,**row))
+                        if reuse_evaluations and i < len(shared_rows):
+                            saved = shared_rows[i]
+                            if (saved['trace_index'],saved['trace_seed']) != (i,seed): raise ValueError('Evaluation cache trace mismatch')
+                        else:
+                            row = simulate(s,p,eval_cache[i],stop_at)
+                            saved = dict(trace_index=i,trace_seed=seed,**row)
+                            if reuse_evaluations:
+                                if len(shared_rows) != i: raise ValueError('Evaluation cache prefix mismatch')
+                                shared_rows.append(saved)
+                        rows.append(saved)
                         if len(rows) % cfg['save_every_traces'] == 0:
+                            if reuse_evaluations: atomic_json(cache_path,shared_rows)
                             atomic_json(path,rows); atomic_json(output/'status.json',dict(state='running',**current,saved_traces=len(rows)))
-                finally: atomic_json(path,rows)
+                finally:
+                    if reuse_evaluations: atomic_json(cache_path,shared_rows)
+                    atomic_json(path,rows)
                 summary = summarize(c,rows)
                 summary.update(planning_s=selected[method]['planning_s'],candidates=selected[method]['candidates'],
                                planner_status=selected[method]['status'],structural_feasible=True,

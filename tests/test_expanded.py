@@ -260,12 +260,14 @@ class ExpandedRunnerTests(unittest.TestCase):
             cfg['seed']+=1
             with self.assertRaisesRegex(ValueError,'NEW output'): run(cfg,out,max_minutes=1)
 
-    def test_lock_and_thirty_minute_cap(self):
+    def test_lock_and_optional_time_limit(self):
         with tempfile.TemporaryDirectory() as tmp:
             out=Path(tmp); (out/'.run.lock').write_text('1')
             with self.assertRaisesRegex(RuntimeError,'locked'): run(tiny_config(),out)
             self.assertTrue((out/'.run.lock').exists())
-            with self.assertRaises(ValueError): run(tiny_config(),out,max_minutes=31)
+            with self.assertRaisesRegex(RuntimeError,'locked'): run(tiny_config(),out,max_minutes=31)
+            with self.assertRaisesRegex(RuntimeError,'locked'): run(tiny_config(),out,max_minutes=None)
+            with self.assertRaises(ValueError): run(tiny_config(),out,max_minutes=0)
 
     def test_config_invalid_choice_rejected(self):
         cfg=tiny_config(); cfg['choices']['checkpoint_mode']=['magic']
