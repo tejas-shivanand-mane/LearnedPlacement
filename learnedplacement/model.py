@@ -67,15 +67,21 @@ class Plan:
     groups: tuple[tuple[int, ...], ...]
     # At most one additional snapshot per shard: (shard index, host machine).
     backups: tuple[tuple[int, int], ...] = ()
+    # None inherits the case's reference policy. steps or larger means no
+    # periodic write before job completion; initial version 0 stays durable.
+    checkpoint_every: int | None = None
 
     def to_dict(self):
-        return {"groups": [list(g) for g in self.groups],
-                "backups": [list(b) for b in self.backups]}
+        result = {"groups": [list(g) for g in self.groups],
+                  "backups": [list(b) for b in self.backups]}
+        if self.checkpoint_every is not None:
+            result["checkpoint_every"] = self.checkpoint_every
+        return result
 
     @classmethod
     def from_dict(cls, obj):
         return cls(tuple(tuple(g) for g in obj["groups"]),
-                   tuple(tuple(b) for b in obj["backups"]))
+                   tuple(tuple(b) for b in obj["backups"]), obj.get("checkpoint_every"))
 
     @property
     def active(self):
@@ -112,6 +118,8 @@ def validate_case(c):
 
 def violations(c, p):
     errors = []
+    if p.checkpoint_every is not None and (type(p.checkpoint_every) is not int or p.checkpoint_every <= 0):
+        errors.append("checkpoint interval must be a positive integer")
     if len(p.groups) != c.replicas or any(len(g) != c.shards for g in p.groups):
         errors.append("wrong group dimensions")
     ids = [n for g in p.groups for n in g]

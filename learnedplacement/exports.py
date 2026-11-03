@@ -30,7 +30,7 @@ def analysis_bundle(output):
                 # Keep the chosen plan, timing, score and candidate-pool hash.
                 # The full pool and duplicate unaware record remain local.
                 record['selection'] = {k: v for k, v in plans[method].items()
-                                       if k not in ('candidate_audit', 'unaware_result')}
+                                       if k not in ('candidate_audit', 'unaware_result', 'controls')}
             for suffix, key in [('summary', 'summary'), ('failure_free', 'failure_free')]:
                 path = directory/f'{method}.{suffix}.json'
                 if path.exists():

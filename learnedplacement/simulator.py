@@ -67,6 +67,7 @@ class Simulation:
         if errors:
             raise ValueError("; ".join(errors))
         self.c, self.p = c, p
+        self.checkpoint_every = c.checkpoint_every if p.checkpoint_every is None else p.checkpoint_every
         self.events = events
         self.stop_at = stop_at
         self.t = 0.
@@ -245,7 +246,7 @@ class Simulation:
                 self.advance(self.events[self.e].time_s - self.t, "waiting")
                 continue
             # Fixed synchronous snapshot policy; all copies commit atomically.
-            if self.version > 0 and self.version % c.checkpoint_every == 0 and self.persistent != self.version:
+            if self.version > 0 and self.version % self.checkpoint_every == 0 and self.persistent != self.version:
                 duration, participants = self.transfer([(s, -1) for s in range(c.shards)], sources)
                 if self.advance(duration, "checkpoint", participants):
                     self.persistent = self.version

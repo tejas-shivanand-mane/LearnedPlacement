@@ -45,7 +45,9 @@ def validate_config(config):
     dependencies = {"joint_local_no_backup": ["joint_local"],
                     "joint_local": list(METHODS[:4]), "joint_greedy": list(METHODS[:4]),
                     "matched_failure_unaware": ["matched_failure_aware"],
-                    "matched_no_backup": ["matched_failure_aware"]}
+                    "matched_no_backup": ["matched_failure_aware"],
+                    **{m: ["checkpoint_joint"] for m in ("checkpoint_unaware", "checkpoint_fixed_search",
+                                                         "checkpoint_fixed_ablation", "checkpoint_no_backup")}}
     for i, method in enumerate(methods):
         if any(parent not in methods[:i] for parent in dependencies.get(method, [])):
             raise ValueError(f"Missing or misordered dependencies for {method}")
@@ -54,6 +56,20 @@ def validate_config(config):
             raise ValueError("matched_candidates must be a positive integer")
         if not isinstance(config.get("matched_seconds"), (int, float)) or not 0 < config["matched_seconds"] < float("inf"):
             raise ValueError("matched_seconds must be positive and finite")
+    if any(m in methods for m in ("checkpoint_joint", "speed_grouped_tuned", "domain_packed_tuned")):
+        intervals = config.get("checkpoint_intervals", [])
+        if not intervals or any(type(n) is not int or n <= 0 for n in intervals) or len(set(intervals)) != len(intervals):
+            raise ValueError("checkpoint_intervals must be unique positive integers")
+        references = [config["workload"]["checkpoint_every"]] + [
+            p.get("workload", {}).get("checkpoint_every", config["workload"]["checkpoint_every"])
+            for p in config.get("profiles", [])]
+        if any(n not in intervals for n in references):
+            raise ValueError("checkpoint_intervals must include every reference checkpoint interval")
+    if "checkpoint_joint" in methods:
+        if type(config.get("checkpoint_layouts")) is not int or config["checkpoint_layouts"] <= 0:
+            raise ValueError("checkpoint_layouts must be a positive integer")
+        if not isinstance(config.get("checkpoint_seconds"), (int, float)) or not 0 < config["checkpoint_seconds"] < float("inf"):
+            raise ValueError("checkpoint_seconds must be positive and finite")
     profiles = config.get("profiles", [{"name": "reference"}])
     names = [p["name"] for p in profiles]
     if not names or len(set(names)) != len(names) or any(not isinstance(n, str) or not n.replace("_", "").isalnum() for n in names):
@@ -149,7 +165,7 @@ def build_summary(output):
     return results
 
 
-def run(config_path=None, output="results/pilot_v2", max_minutes=30, config=None):
+def run(config_path=None, output="results/pilot_v3", max_minutes=30, config=None):
     """Run/resume with a cooperative wall-clock cap (including planning/evaluation).
 
     Completed plans and batches of observations are retained. On resume, only a
@@ -158,7 +174,7 @@ def run(config_path=None, output="results/pilot_v2", max_minutes=30, config=None
     if not isinstance(max_minutes, (int, float)) or not 0 < max_minutes < float("inf"):
         raise ValueError("max_minutes must be positive and finite")
     if config is None:
-        config = read_json(config_path or ROOT / "configs" / "pilot_v2.json")
+        config = read_json(config_path or ROOT / "configs" / "pilot_v3.json")
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     lock = output / ".run.lock"
@@ -190,7 +206,8 @@ def run(config_path=None, output="results/pilot_v2", max_minutes=30, config=None
                 if (directory / f"{method}.summary.json").exists():
                     continue
                 if method not in plans:
-                    if planning_traces is None and method != "joint_local_no_backup":
+                    if planning_traces is None and method not in ("joint_local_no_backup", "matched_no_backup", "matched_failure_unaware",
+                                                                  "checkpoint_unaware", "checkpoint_fixed_search", "checkpoint_fixed_ablation", "checkpoint_no_backup"):
                         planning_traces = []
                         for i in range(config["planning_traces"]):
                             check_budget(stop_at)
@@ -225,6 +242,8 @@ def run(config_path=None, output="results/pilot_v2", max_minutes=30, config=None
                     atomic_json(obs_path, rows)
                 summary = summarize(c, rows)
                 summary.update(planning_s=plans[method]["planning_s"],
+                               checkpoint_every=p.checkpoint_every if p.checkpoint_every is not None else c.checkpoint_every,
+                               completed_layouts=plans[method].get("completed_layouts"),
                                failure_free_completion_s=healthy["completion_s"],
                                failure_penalty_s=(summary["mean_completion_s"]-healthy["completion_s"]
                                                   if summary["mean_completion_s"] is not None and healthy["completed"] else None),
@@ -270,11 +289,16 @@ def paired_report(output, selected="joint_local", baseline="separate", repeats=1
             continue
         a, b = [read_json(d/f"{m}.observations.json") for m in (selected, baseline)]
         plans = read_json(d/"plans.json")
-        matched = {selected, baseline} == {"matched_failure_aware", "matched_failure_unaware"}
+        matched = {selected, baseline} in ({"matched_failure_aware", "matched_failure_unaware"},
+                                          {"checkpoint_joint", "checkpoint_unaware"})
+        matched_layout = {selected, baseline} == {"checkpoint_joint", "checkpoint_fixed_search"}
         if matched:
             x, y = plans[selected], plans[baseline]
             if x["candidate_pool_sha256"] != y["candidate_pool_sha256"] or x["candidates"] != y["candidates"]:
                 raise ValueError("Matched candidate pool mismatch")
+        if matched_layout and (plans[selected]["layout_pool_sha256"] != plans[baseline]["layout_pool_sha256"] or
+                               plans[selected]["completed_layouts"] != plans[baseline]["completed_layouts"]):
+            raise ValueError("Matched layout pool mismatch")
         summary_a, summary_b = [read_json(path) for path in paths]
         if len(a) != len(b) or any(x["trace_seed"] != y["trace_seed"] for x, y in zip(a, b)):
             raise ValueError("Paired trace mismatch")
@@ -289,6 +313,7 @@ def paired_report(output, selected="joint_local", baseline="separate", repeats=1
         comparisons.append(dict(case_id=cid, profile=Case.from_dict(read_json(d/"case.json")).profile,
                                 status="complete", selected=selected, baseline=baseline,
                                 matched_candidate_pool=matched,
+                                matched_layout_pool=matched_layout,
                                 matched_candidates=plans[selected]["candidates"] if matched else None,
                                 failure_free_time_difference_s=healthy_delta,
                                 failure_penalty_difference_s=statistics.mean(delta)-healthy_delta if healthy_delta is not None else None,
@@ -335,8 +360,8 @@ def export_run(output, destination=None, *, full=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default=str(ROOT/"configs"/"pilot_v2.json"))
-    parser.add_argument("--output", default="results/pilot_v2")
+    parser.add_argument("--config", default=str(ROOT/"configs"/"pilot_v3.json"))
+    parser.add_argument("--output", default="results/pilot_v3")
     parser.add_argument("--max-minutes", type=float, default=30)
     parser.add_argument("--status", action="store_true")
     args = parser.parse_args()

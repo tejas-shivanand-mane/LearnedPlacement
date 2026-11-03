@@ -1,0 +1,75 @@
+{
+  "seed": 20261104,
+  "active_nodes": [
+    4,
+    8,
+    16
+  ],
+  "regimes": [
+    "homogeneous",
+    "cheap_risky",
+    "fast_risky",
+    "correlated"
+  ],
+  "instances_per_regime": 2,
+  "planning_traces": 32,
+  "evaluation_traces": 256,
+  "save_every_traces": 8,
+  "greedy_candidates": 16,
+  "local_candidates": 64,
+  "greedy_seconds": 5.0,
+  "local_seconds": 15.0,
+  "deadline_factor": 1.75,
+  "cost_budget_factor": 1.5,
+  "simulation_horizon_factor": 8.0,
+  "workload": {
+    "shards": 4,
+    "state_gib": 16.0,
+    "working_gib": 4.0,
+    "steps": 240,
+    "base_step_s": 3.0,
+    "collective_factor": 0.12,
+    "cross_domain_factor": 0.55,
+    "storage_gib_s": 2.0,
+    "backup_every": 20,
+    "checkpoint_every": 80,
+    "backup_budget_gib": 8.0,
+    "detection_s": 2.0,
+    "reinit_s": 4.0,
+    "replacement_s": 30.0,
+    "required_success": 0.95
+  },
+  "methods": [
+    "speed_grouped",
+    "speed_grouped_tuned",
+    "domain_packed_tuned",
+    "checkpoint_joint",
+    "checkpoint_unaware",
+    "checkpoint_fixed_search",
+    "checkpoint_fixed_ablation",
+    "checkpoint_no_backup"
+  ],
+  "matched_candidates": 64,
+  "matched_seconds": 30.0,
+  "profiles": [
+    {
+      "name": "reference",
+      "description": "Original durable storage speed with budget slack for failure overhead."
+    },
+    {
+      "name": "slow_storage",
+      "description": "Only durable-storage bandwidth changes; failure rates and restart/replacement costs are unchanged.",
+      "workload": {
+        "storage_gib_s": 0.25
+      }
+    }
+  ],
+  "checkpoint_intervals": [
+    20,
+    40,
+    80,
+    240
+  ],
+  "checkpoint_layouts": 32,
+  "checkpoint_seconds": 30.0
+}

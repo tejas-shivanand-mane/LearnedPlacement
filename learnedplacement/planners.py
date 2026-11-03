@@ -14,7 +14,10 @@ METHODS = ("speed_first", "reliability_first", "separate", "domain_packed",
            "joint_greedy", "joint_local", "joint_local_no_backup")
 SIMPLE_METHODS = METHODS[:4] + ("speed_grouped",)
 MATCHED_METHODS = ("matched_failure_aware", "matched_failure_unaware", "matched_no_backup")
-ALL_METHODS = METHODS + ("speed_grouped",) + MATCHED_METHODS
+CHECKPOINT_METHODS = ("speed_grouped_tuned", "domain_packed_tuned", "checkpoint_joint",
+                      "checkpoint_unaware", "checkpoint_fixed_search",
+                      "checkpoint_fixed_ablation", "checkpoint_no_backup")
+ALL_METHODS = METHODS + ("speed_grouped",) + MATCHED_METHODS + CHECKPOINT_METHODS
 
 
 def initial(c, kind):
@@ -59,7 +62,7 @@ def add_backups(c, p):
         domains = {c.nodes[g[s]].domain for g in p.groups}
         candidates = []
         for n, node in enumerate(c.nodes):
-            q = Plan(p.groups, tuple(sorted(p.backups + ((s, n),))))
+            q = replace(p, backups=tuple(sorted(p.backups + ((s, n),))))
             if not violations(c, q):
                 candidates.append(((node.domain in domains, node.failure_per_hour,
                                     node.price_per_hour if n not in p.active else 0., n), q))
@@ -95,12 +98,15 @@ def neighbor(c, p, rng):
         r, s = divmod(a, c.shards)
         u, v = divmod(b, c.shards)
         groups[r][s], groups[u][v] = groups[u][v], groups[r][s]
-        return add_backups(c, Plan(tuple(tuple(g) for g in groups)))
-    return Plan(tuple(tuple(g) for g in groups), tuple(sorted(backups.items())))
+        return add_backups(c, replace(p, groups=tuple(tuple(g) for g in groups), backups=()))
+    return replace(p, groups=tuple(tuple(g) for g in groups), backups=tuple(sorted(backups.items())))
 
 
 def plan_method(c, method, traces, config, prior, stop_at=None):
     started = time.monotonic()
+    if method in CHECKPOINT_METHODS:
+        from .checkpoint import plan_checkpoint_method
+        return plan_checkpoint_method(c, method, traces, config, prior, stop_at)
     if method == "matched_failure_aware":
         return matched_search(c, traces, config, stop_at)
     if method == "matched_failure_unaware":
@@ -108,7 +114,7 @@ def plan_method(c, method, traces, config, prior, stop_at=None):
     if method == "matched_no_backup":
         parent = prior["matched_failure_aware"]
         p = Plan.from_dict(parent["plan"])
-        return dict(plan=Plan(p.groups).to_dict(), planning_s=time.monotonic()-started,
+        return dict(plan=replace(p, backups=()).to_dict(), planning_s=time.monotonic()-started,
                     candidates=0, simulations=0, status="placement_matched_ablation",
                     parent="matched_failure_aware", parent_planning_s=parent["planning_s"],
                     search_summary=None)
@@ -130,7 +136,7 @@ def plan_method(c, method, traces, config, prior, stop_at=None):
                     planning_point_feasible=summary["point_estimate_feasible"])
     if method == "joint_local_no_backup":
         p = Plan.from_dict(prior["joint_local"]["plan"])
-        return dict(plan=Plan(p.groups).to_dict(), planning_s=time.monotonic()-started,
+        return dict(plan=replace(p, backups=()).to_dict(), planning_s=time.monotonic()-started,
                     candidates=0, simulations=0, status="placement_matched_ablation",
                     parent="joint_local", parent_planning_s=prior["joint_local"]["planning_s"],
                     search_summary=None)

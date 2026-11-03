@@ -92,8 +92,8 @@ are created. This is a shared-endpoint bandwidth approximation, not a network
 simulator. Restoring several groups in a batch is atomic in this model.
 
 Detection, rejoin, refresh and recovery-mode choices are fixed for all planners.
-The planner only chooses the initial machines, group layout, shard positions and
-additional backup hosts. It cannot see the sampled future failures.
+The planner chooses the initial machines, group layout, shard positions,
+additional backup hosts and (in v3) the durable checkpoint interval. It cannot see the sampled future failures.
 
 ## Statistical contract
 
@@ -129,7 +129,8 @@ The reference and tighter-budget profiles have identical hardware and recovery
 parameters. A third profile jointly increases persistent I/O, replacement and
 reinitialization costs; it is a combined synthetic stress case, not an isolated
 causal experiment on any one parameter. Profile budgets include their own
-reference checkpoint overhead. See README for exact values and limitations.
+reference checkpoint overhead. The historical values remain in
+`configs/pilot_v2.json`; v3 defaults are described in README.
 
 Both matched objectives select from exactly the same fully scored candidate
 prefix, recorded with a hash and score audit. Their CPU effort differs because
@@ -137,3 +138,30 @@ failure-free scoring is deterministic and needs one simulation, whereas aware
 scoring averages the planning traces. Candidate generation is independent of
 both objectives and never reads held-out traces. This isolates failure-aware
 scoring within a bounded pool rather than measuring optimal joint planning.
+
+## V3 checkpoint decisions
+
+`Plan.checkpoint_every` is optional. Missing/None inherits the case's reference
+interval, preserving old plan semantics. A specified value must be a positive
+integer. Simulation uses that interval without mutating the case, failure trace,
+deadline, monetary budget or horizon. Backup staging, refresh cadence and the
+version-consistent recovery rules are unchanged.
+
+Periodic checkpoints occur at matching positive committed versions before job
+completion. Interval >= total steps gives no periodic checkpoint. The initial
+version 0 is durable for every plan; final output persistence is excluded from
+all plans. The reference budget always uses the case's original interval, even
+when a planner selects another one. Healthy diagnostics use each selected plan's
+own interval, retaining its checkpoint overhead.
+
+V3 includes one/two/four replicas with identical total work (240 fixed global
+steps) and tests durable storage at 2 and 0.25 GiB/s. Each case fixes replica and
+shard counts; planners cannot change parallelism. Failure hazards and replacement
+costs remain those of v2's reference profile. Source/config hashes and fresh
+held-out trace seeds distinguish this new experiment from the earlier pilots.
+
+The three checkpoint search selectors commit only complete layout blocks, each
+containing all checkpoint grid choices. The aware/unaware tunable selectors see
+identical plans; the fixed-interval control sees the same layouts restricted to
+the reference interval. These controls do not claim equal CPU effort or optimal
+choices. Independent tuned heuristics provide stronger low-cost comparisons.

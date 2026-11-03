@@ -2,7 +2,7 @@
 from pathlib import Path
 
 
-def plot_results(output, active_nodes=8, profile=None):
+def plot_results(output, active_nodes=8, profile=None, reference_method=None):
     import matplotlib.pyplot as plt
     import pandas as pd
     path = Path(output)/"summary.csv"
@@ -16,7 +16,8 @@ def plot_results(output, active_nodes=8, profile=None):
     if df.empty:
         print(f"No completed results for {active_nodes} active nodes yet.")
         return None
-    ref = df[df.method == "separate"][["case_id", "mean_completion_s", "mean_cost_usd"]]
+    reference_method = reference_method or ("separate" if "separate" in set(df.method) else "speed_grouped_tuned")
+    ref = df[df.method == reference_method][["case_id", "mean_completion_s", "mean_cost_usd"]]
     paired = df.merge(ref, on="case_id", suffixes=("", "_reference"))
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5), layout="constrained")
     for method, group in paired.groupby("method", sort=False):
@@ -25,11 +26,11 @@ def plot_results(output, active_nodes=8, profile=None):
                         valid.mean_completion_s/valid.mean_completion_s_reference,
                         label=method, alpha=.7, s=30)
     axes[0].scatter([1], [1], color="black", marker="x", s=80)
-    axes[0].set(xlabel="Cost / separate planner cost", ylabel="Time / separate planner time",
+    axes[0].set(xlabel=f"Cost / {reference_method} cost", ylabel=f"Time / {reference_method} time",
                 title="Paired cases: lower and left is better")
     # Ablations inherit a searched placement; construction time is not deployment
     # planning latency. Their parent latency remains available in plans.json.
-    timed = df[~df.method.isin(["joint_local_no_backup", "matched_no_backup"])]
+    timed = df[~df.method.isin(["joint_local_no_backup", "matched_no_backup", "checkpoint_fixed_ablation", "checkpoint_no_backup"])]
     timing = timed.groupby("method", sort=False).planning_s.median()
     axes[1].scatter(timing.clip(lower=1e-6)*1000, range(len(timing)), s=45)
     axes[1].set_yticks(range(len(timing)), timing.index)
