@@ -1,3 +1,6 @@
+> This document describes the original v1–v3 engine. Pilot v4 uses a separate
+> expanded engine; see [docs/PILOT_V4.md](docs/PILOT_V4.md) for its semantics.
+
 # Simulator contract and limitations
 
 This is a planning surrogate for a **single fixed-work HSDP-style job**. It is
