@@ -305,20 +305,31 @@ def paired_report(output, selected="joint_local", baseline="separate", repeats=1
     return comparisons
 
 
-def export_run(output, destination=None):
+def export_run(output, destination=None, *, full=False):
+    """Export compact analysis by default; full=True includes raw debugging data."""
     output = Path(output).resolve()
     if (output/".run.lock").exists():
         raise RuntimeError("Stop/pause the runner before exporting")
     if not (output/"manifest.json").exists():
         raise ValueError("No run manifest to export")
-    destination = Path(destination).resolve() if destination else output.with_suffix(".zip")
+    destination = Path(destination).resolve() if destination else output.with_name(output.name + (".full.zip" if full else ".analysis.zip"))
     if destination == output or output in destination.parents:
         raise ValueError("Place the archive outside the run directory")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(output.rglob("*")):
-            if path.is_file() and not path.name.endswith(".tmp"):
-                archive.write(path, str(path.relative_to(output)))
+    from .exports import analysis_bundle
+    bundle = None if full else analysis_bundle(output)
+    temporary = destination.with_name(destination.name + ".tmp")
+    try:
+        with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+            if full:
+                for path in sorted(output.rglob("*")):
+                    if path.is_file() and not path.name.endswith(".tmp"):
+                        archive.write(path, str(path.relative_to(output)))
+            else:
+                archive.writestr("analysis.json", json.dumps(bundle, separators=(",", ":"), allow_nan=False))
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
     return destination
 
 
