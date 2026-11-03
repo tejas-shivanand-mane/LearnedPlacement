@@ -1,0 +1,7 @@
+{
+  "seed": 20261130,
+  "case_mode": "balanced",
+  "search_seeds": [101, 202],
+  "seconds": [1, 2, 5, 10, 25],
+  "candidates": [8, 16, 32, 64]
+}

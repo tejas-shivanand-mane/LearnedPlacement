@@ -1,42 +1,39 @@
 # LearnedPlacement
 
 A local simulator for resource, placement, checkpoint and recovery planning.
-**Pilot V8 compares an MLP, a set encoder and a heterogeneous GNN**, using matched
-REINFORCE training budgets and separately selected direct/top-eight checkpoints.
-It also diagnoses candidate-pool feasibility under adverse networks and varies
-latency independently of bandwidth. Distributed workloads remain simulated;
-planner networks really train. No Ray, cloud or solver is required.
+**Pilot V9 reuses existing V8 RL models to initialize local search; no training.**
+Compare heuristic, random, MLP, Set and GNN starts with the same search procedure,
+plus a stronger heuristic portfolio. Record quality at matched time and candidate
+budgets, using independent evaluation failure traces.
 
 ## Run locally
 
 ```bash
 git pull --ff-only
-source .venv/bin/activate
 python -m pip install -e '.[notebook,architecture]'
 python -m jupyter lab notebooks/PlacementPilot.ipynb
 ```
 
-Python 3.10+ is required. Restart the kernel after pulling. `DEVICE="auto"` uses
-CUDA when available, otherwise CPU; use a compatible CUDA PyTorch build for GPU
-training. One process owns the GPU and four CPU workers simulate sampled actions.
-Evaluation uses CPU inference consistently across all models. No graph framework
-or additional GPU is required. **No mandatory time limit** (`MAX_MINUTES=None`).
+Restart the kernel after pulling. Set `SOURCE` to your completed V8 tuning or
+models folder (default `results/pilot_v8_tuning_w4`); analysis ZIPs have no weights.
+The settings cell checks the models before running. All available direct-policy
+seeds are retained. No Ray, cloud, Z3, retraining or GPU is required.
 
-Run the network diagnostic cell, then the train/resume cell. Defaults: 3 encoders
-× 3 seeds, 2,048/4,096/8,192-episode checkpoints and pools of 6–96 machines. The
-six profiles include 1 ms versus 10 ms latency and separate bandwidth reductions.
-Selection uses validation only; keep final test untouched. The reward is unchanged.
+Default: 24 balanced fresh cases, all six sizes/profiles, two search seeds,
+four CPU workers, 32 planning traces, 256 independent evaluation traces.
+Budgets: 1/2/5/10/25 seconds and 8/16/32/64 candidate evaluations.
+There is no mandatory overall time limit. A trajectory can continue beyond
+25 seconds to supply count checkpoints; later plans cannot affect earlier results.
+Choose `case_mode="full"` before starting for 144 cases. Keep settings and workers
+unchanged to resume; choose a new output folder for a changed experiment.
 
-The comparison cell defaults to including original and tuned MLPs from
-`results/pilot_v7_models_w4`. Set `LEGACY_SOURCE` to your actual V7 models folder;
-an analysis ZIP has no weights. Explicitly set it to `None` to omit historical
-policies. Share the two compact ZIPs from the export cell. See
-[the V8 protocol](docs/PILOT_V8.md) for budgets, architecture details, latency
-assumptions, source checks and limitations. Full research runs are left for you.
+Run the experiment cell, then the plotting and compact export cells. Share the
+single `.analysis.zip`. See [the V9 protocol](docs/PILOT_V9.md) for timing,
+model provenance, resume details and limitations. Full research runs are left
+for you. Prior outputs are preserved.
 
-V7 is preserved in `notebooks/PlacementPilotV7.ipynb`; earlier V5/V6 notebooks
-also remain available. Original results are preserved. Source/configuration or
-dependency changes require a new output directory; rerun unchanged to resume.
+V8 training remains in `notebooks/PlacementPilotV8.ipynb` and is documented in
+[the V8 protocol](docs/PILOT_V8.md). Earlier notebooks remain available.
 
 ## What v5 compares
 
