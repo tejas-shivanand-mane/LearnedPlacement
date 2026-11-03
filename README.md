@@ -1,222 +1,219 @@
 # LearnedPlacement
 
-A local, CPU-only pilot for **joint machine placement and protection of sharded
-training state**. This first experiment compares inexpensive planners in a
-synthetic HSDP-style simulator. It does **not** train an RL model or execute real
-distributed training. It needs no Ray, GPU, Z3, cloud credentials, or paid service.
+A local, CPU-only experiment for **joint placement and protection of sharded
+training state**. It models a fixed-work HSDP-style job. It needs no Ray, GPU,
+Z3, cloud credentials, or paid service. It does not train a learned policy or
+execute real distributed training.
 
-## Run locally
-
-Python 3.10 or newer:
+## Run the second experiment
 
 ```bash
-git clone https://github.com/tejas-shivanand-mane/LearnedPlacement.git
 cd LearnedPlacement
-python3 -m venv .venv
+git pull --ff-only
 source .venv/bin/activate
 python -m pip install -e '.[notebook]'
 python -m jupyter lab notebooks/PlacementPilot.ipynb
 ```
 
-If you already cloned it, use `git pull` inside that checkout. Open the notebook
-and run its cells in order. Settings are visible and editable. The **Run/resume**
-cell is the only cell that starts the experiment. Plotting cells read saved data
-and can be run independently after setup. There is no automatic experiment or
-CI benchmark.
+For a fresh checkout, clone
+`https://github.com/tejas-shivanand-mane/LearnedPlacement.git`, enter the directory,
+and create `.venv` with `python3 -m venv .venv` first. Python 3.10+ is required.
 
-The core simulator and command-line runner use only the Python standard library:
+**Restart the notebook kernel after pulling.** Run the updated notebook in order.
+Its default output is `results/pilot_v2`; previous results remain in `pilot_v1`.
+The Run/resume cell starts the experiment. Settings are visible/editable.
+Plotting cells read saved results only. No experiment runs on import or in CI.
+
+The standard-library command-line equivalent is:
 
 ```bash
-python -m learnedplacement.runner --config configs/pilot.json --output results/pilot --max-minutes 30
-python -m learnedplacement.runner --output results/pilot --status
+python -m learnedplacement.runner --config configs/pilot_v2.json --output results/pilot_v2 --max-minutes 30
+python -m learnedplacement.runner --output results/pilot_v2 --status
 ```
 
-The default is **24 cases × 7 planners × 256 held-out failure traces**, plus
-planning evaluations. A 30-minute **cooperative wall-clock limit** pauses work;
-it is not a promise that the full pilot finishes in 30 minutes. Rerun the same
-cell/command to resume. A brief final save can occur after the limit.
+Each invocation has a **30-minute cooperative wall-clock limit**, including
+planning and evaluation. A brief final save may follow the limit. This is not a
+promise that the whole experiment finishes in 30 minutes. Repeat the same
+cell/command to resume. You can change the invocation time limit when resuming.
 
-To run the small correctness checks (not the pilot):
+## Why v2
+
+The first pilot suggested that grouping machines with similar speeds accounted
+for much of the time improvement; additional backups did not demonstrate a
+benefit. V2 adds controls to separate normal throughput from failure effects.
+It does not assume that failure-aware placement or extra backups will win.
+
+The main question is: **Does accounting for failures when choosing a plan reduce
+total completion time under failures, beyond a strong speed-based placement?**
+
+| Method | What it does |
+|---|---|
+| `speed_first` | Select fastest machines; spread domains within groups. |
+| `separate` | Select by a price/speed/risk heuristic; then consider extra backups. |
+| `domain_packed` | Select reliable machines; pack domains within groups. |
+| `speed_grouped` | Select fastest machines, then group adjacent speeds to avoid mixed-speed bottlenecks. |
+| `matched_failure_aware` | Rank a shared candidate pool using failure planning traces. |
+| `matched_failure_unaware` | Rank the exact same pool assuming no failures. |
+| `matched_no_backup` | Preserve the aware plan's exact placement and remove its extra backups. |
+
+Each of the first four baselines scores its plain plan and a heuristic protected
+variant on the planning traces, allowing it to reject unhelpful backups.
+`speed_grouped` is therefore not the strictly failure-unaware control; the
+matched search provides that control.
+
+The matched pair uses risk-neutral seeds and random valid moves. Candidate
+generation sees **zero failure hazards, no scoring outcomes, and no held-out
+traces**. It seeds speed-grouped, speed-spread, price/speed and domain-packed
+layouts, with and without heuristic backups, then proposes swaps, machine
+replacements and backup changes. Both scorers finish a candidate before either
+incumbent can change. An interrupted candidate is excluded from both choices.
+The saved audit lists completed candidates and both objective scores; a pool
+hash verifies pairing. If none completes, a valid speed-grouped fallback is
+marked with zero candidates and unknown planning feasibility.
+
+This is bounded shared-pool search, **not adaptive hill climbing or an exact
+optimizer**. The control isolates scoring under failures within this pool; it
+cannot establish the best achievable benefit of failure-aware search.
+Budgets match candidate choices, not CPU effort: the aware objective uses 32
+traces per candidate; the deterministic unaware objective needs one failure-free
+simulation. Each records scorer time plus shared generation/bookkeeping time.
+The pair's actual combined wall time is also recorded; the two attributed times
+must not be added as a wall-time measurement. Ablation construction time excludes
+its parent's search and is omitted from the planning-latency plot.
+
+## Configuration
+
+`configs/pilot_v2.json` and the notebook expose:
+
+| Setting | Default |
+|---|---|
+| Active machines / candidate machines | 8 / 12 or 16 / 24 |
+| Groups × shards | 2 × 4 or 4 × 4 |
+| Machine regimes | homogeneous, cheap/risky, fast/risky, correlated outages |
+| Instances per size/regime | 2 seeded instances |
+| Profiles | reference, tight, recovery_stress |
+| Total cases | 48 |
+| Held-out evaluations | 48 × 7 × 256 = 86,016 |
+| Planning traces | 32, separate from held-out traces |
+| Matched search limit | 64 completed candidates or 30 s for the pair per case |
+| Work | 240 steps; 3 s unit-speed compute per healthy step |
+| State / working memory | 16 GiB over 4 shard positions / 4 GiB per active machine |
+| Extra backup storage | 8 GiB; at most one extra snapshot per shard |
+| Backup / durable checkpoint interval | 20 / 80 committed steps |
+| Required deadline success | 0.95 |
+
+The three profiles are:
+
+| Profile | Deadline factor | Cost factor | Durable storage | Replacement | Reinitialization |
+|---|---:|---:|---:|---:|---:|
+| `reference` | 1.75 | 1.50 | 2 GiB/s | 30 s | 4 s |
+| `tight` | 1.15 | 1.00 | 2 GiB/s | 30 s | 4 s |
+| `recovery_stress` | 1.15 | 1.00 | 0.25 GiB/s | 120 s | 16 s |
+
+These are **synthetic sensitivity assumptions**, not measured hardware/service
+parameters. Tight budgets reduce the slack observed in v1 without guaranteeing
+feasibility. The stress profile tests a joint increase in recovery costs: an
+8× slower durable tier and 4× longer replacement/reinitialization. It cannot
+attribute a change to one of those factors individually. Checkpoint cadence is
+fixed across profiles, not optimized to favor backups. No profile guarantees
+that extra protection pays for itself. Calibrate against real measurements
+before making systems performance claims.
+
+Hardware is identical across profiles for each size/regime/instance. Profiles
+reuse failure-seed keys, coupling outage-start randomness; replacement durations
+and horizons can differ. Within each case, every frozen plan sees exactly the
+same held-out event stream. Proposal randomness is also reused across profiles,
+though time caps can shorten the completed prefix differently.
+
+Machine hazards remain the original synthetic stress rates: 0.12/hour ordinary,
+2/hour risky, and 0.2/hour plus 1 domain outage/hour in the correlated regime.
+`model.make_case()` contains the editable generator. The notebook previews case
+budgets before running. A smaller fresh run can select only the reference
+profile; configuration changes always require a new output directory.
+
+## Objective, constraints and measurements
+
+The objective is **average total completion time including failures**, not
+failure-free training time or recovery time alone. It includes useful work,
+backup/checkpoint overhead, detection, waiting, recovery, reduced throughput and
+recomputation. Cost is a constraint and final tie-breaker.
+
+Candidates must satisfy structural assignment, per-node memory (including
+backup staging), and extra backup storage constraints. Search ranks by:
+
+1. Smaller noncompletion fraction at the finite simulation horizon.
+2. Smaller normalized cost/deadline-success constraint violations.
+3. Lower restricted mean completion time.
+4. Lower observed mean cost.
+
+No feasible candidate is guaranteed. Planning uses point estimates; frozen plans
+are evaluated independently on 256 new traces. The final statistical screen
+requires no censoring, a one-sided 95% Wilson lower bound on deadline success
+at least 0.95, and an approximate one-sided 95% normal upper bound on mean cost
+within budget. These are separate per-plan screens, not simultaneous guarantees,
+distribution-free cost bounds, or guarantees under model error.
+
+Budgets use a planner-independent unit-speed, $1/hour-per-machine reference,
+including that profile's checkpoint overhead. The table's factors multiply its
+time and cost. The simulation horizon is 8× reference time. Monetary cost is
+reserved capacity × elapsed time, including downtime and backup-only machines;
+persistent storage and egress fees are excluded.
+
+Each selected plan also gets one **failure-free simulation of the exact same
+plan**, retaining checkpoint and backup costs. This enables:
+
+```
+failure penalty = average completion time under failures - failure-free time
+```
+
+For two plans, total time difference equals failure-free difference plus failure
+penalty difference. The penalty includes all failure-induced changes, not just
+time labeled `recovery`. It is a counterfactual model difference, not a separate
+simulator phase. Paired bootstrap reports include intervals for total and penalty
+differences; subtracting the deterministic healthy difference shifts the interval.
+
+Inspect both plans' feasibility screens, candidate counts and costs. A faster
+infeasible plan is not a constrained-planning win. Null means indicate censoring;
+restricted means and observed costs are retained, and censored cases are not
+silently called completions. Diagnostic plots require uncensored pairs; the full
+results table retains all cases. No test-set plan selection is performed.
+
+## Saved output and resume
+
+Under `results/pilot_v2/`:
+
+- `manifest.json`, `source/`: exact config, source hashes/snapshot and environment.
+- `status.json`: completed/paused/error state and current comparison.
+- `cases/<case>/case.json`, `plans.json`: inputs, plans, scores, timing and candidate audit.
+- `<method>.observations.json`: individual outcomes and paired replay seeds.
+- `<method>.failure_free.json`: full failure-free observation for the frozen plan.
+- `<method>.summary.json`, root `summary.csv`/`summary.json`: completed evaluations.
+- Paired reports and figures generated by the notebook; its final cell exports a ZIP.
+
+Completed work is skipped. Observations save every 8 traces and on clean
+interrupt/pause. A killed process may lose its last unsaved batch. A globally
+interrupted planner restarts on resume. The `.run.lock` prevents competing
+writers; remove a stale lock only after confirming the old process stopped.
+
+Changed config or core source requires a **new output directory**. Existing v1
+runs can still be plotted/read; they cannot resume under changed source hashes.
+`configs/pilot.json` retains the first experiment's settings and legacy planners
+for a fresh historical-style run, not a bit-identical v1 source reproduction.
+Source snapshots in exported archives preserve the original implementation.
+
+## Correctness and limitations
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-## The question
+Tests use small deterministic fixtures, including state loss, rollback,
+version-consistent recovery, backup benefits/costs, shared candidate limits,
+interruption, resume and diagnostic accounting. They do not run the full pilot.
 
-Does choosing machines, replica groups, shard positions and additional backup
-locations together improve completion time over deciding placement first and
-protection afterward, under cost and reliability constraints?
-
-We first measure headroom using heuristics and bounded search. The simulator and
-structured plans can later support imitation learning or RL. No optimal labels
-are required; no result in this pilot is claimed to be optimal.
-
-## Default experiment
-
-| Setting | Value |
-|---|---|
-| Training layouts | 2 groups × 4 shards; 4 groups × 4 shards |
-| Active machines | 8 or 16 |
-| Candidate machine pool | 12 or 24 |
-| Regimes | homogeneous, cheap/risky, fast/risky, correlated-domain outages |
-| Instances per size/regime | 3 independent seeds |
-| Training state | 16 GiB across 4 shard positions, replicated across groups |
-| Working memory | 4 GiB per training machine |
-| Workload | 240 global optimizer steps; 3 s unit-speed compute per healthy step |
-| Extra backup budget | 8 GiB; up to one additional snapshot per shard |
-| Backup refresh | Every 20 committed steps, including initial version 0 |
-| Persistent checkpoint | Every 80 committed steps; initial version 0 is durable |
-| Planning/evaluation traces | 32 / 256, disjoint seed streams |
-| Joint-greedy budget | At most 16 candidates and 5 s per case |
-| Joint-local budget | At most 64 candidates and 15 s per case |
-
-All values are assumptions for this pilot, **not measured cloud/GPU parameters**.
-`configs/pilot.json` controls the workload, trace counts, limits and random seed.
-`model.make_case()` contains the short, editable machine generator. The notebook
-shows a generated case before starting the run.
-
-Homogeneous instances have the same hardware; their failure traces differ by
-instance. Other regimes also have small seeded speed variations. The synthetic
-hazards are 0.12/hour for ordinary machines, 2/hour for risky machines, and
-0.2/hour plus 1 domain event/hour in the correlated stress regime. Those rates
-intentionally expose failure behavior in a short simulated job. They must not
-be presented as an empirical failure distribution. Run sensitivity studies and
-calibrate against real measurements before drawing systems conclusions.
-
-## Planners
-
-| Name | Method |
-|---|---|
-| `speed_first` | Select fast machines; spread domains within groups. |
-| `reliability_first` | Select reliable machines; spread domains within groups. |
-| `separate` | Select by a fixed price/speed/risk score, then choose backups separately. |
-| `domain_packed` | Select reliable machines, then pack domains within groups. |
-| `joint_greedy` | Score baseline seeds and valid one-move alternatives around `separate`. |
-| `joint_local` | Score seeds, then hill-climb using swaps, replacement machines, backup edits and coupled moves. |
-| `joint_local_no_backup` | Keep the selected `joint_local` placement exactly, remove only additional backups. |
-
-Each simple baseline compares **no extra backups** against its separate backup
-heuristic using the same planning traces. This prevents learning/search from
-winning merely because a baseline is forced to pay for useless redundancy.
-The backup heuristic prioritizes exposed shards and favors hosts outside the
-domains containing their existing replicas, with reliable/cheap hosts preferred.
-It is a heuristic score, not a probability theorem.
-
-`joint_greedy` and `joint_local` evaluate complete candidates with the common
-simulator. Candidate limits and time limits both apply. Only fully evaluated
-candidates are retained. Invalid proposals are rejected with a finite attempt
-cap. If time expires before any full candidate is scored, the recorded fallback
-is the separate baseline; it is **not assumed feasible**.
-
-These are original pilot baselines, not implementations of Oobleck, Bamboo,
-Parcae, Chameleon, or LACHESIS. Comparing them does not establish superiority to
-those systems. The first pilot does not enforce equal planning budgets across
-all methods; it records the actual candidate counts, simulations, and latency.
-For a paper, compare quality–latency curves and stronger tuned baselines.
-
-## Execution and recovery semantics
-
-See [MODEL.md](MODEL.md) for the exact surrogate, its limitations, and the state
-consistency assumptions. The most important points are:
-
-* Existing replica groups already contain equivalent training state and are
-  available for peer recovery. Extra backups are genuinely additional.
-* A machine failure destroys its primary and backup state. Other local shards
-  of that group survive until their hosts fail; they can be used as recovery
-  sources even when the group cannot execute.
-* All shards used for a restored model must have the **same committed version**.
-  The simulator never silently combines incompatible versions.
-* Healthy groups continue with a fixed sample count per optimizer step. Fewer
-  groups do more work each. Rejoining groups are synchronized before execution.
-* Detection, restoring groups and snapshot writes block progress in this first
-  model. These conservative policies are fixed across planners.
-* Failures occur at continuous simulated times, including during training,
-  snapshot writes, and recovery. Failed atomic operations cannot commit.
-* If the whole run exceeds its configured simulation horizon, it is recorded
-  as **censored**, not as completing at the horizon.
-
-## Objective and constraints
-
-The planning objective is expected completion time under:
-
-1. Unique machine assignment and fixed group dimensions.
-2. Per-node memory, including a staging buffer for each extra backup.
-3. A total extra backup budget.
-4. An expected monetary-cost budget.
-5. A deadline-success target (default 0.95).
-
-For the default generator, budgets are derived from a fixed unit-speed, $1/hour
-reference configuration. The reference includes the shared checkpoint policy.
-Deadline = 1.75 × reference time; cost budget = 1.5 × reference cost. The finite
-simulation horizon is 8 × reference time.
-
-Planning uses point estimates from its 32 traces. Candidate ranking first
-penalizes noncompletion and normalized constraint violations, then completion
-time and cost. A candidate may still be infeasible; this is explicitly reported.
-
-Final reporting uses 256 **new** traces. `statistical_screen_passed` requires no
-censoring, a one-sided 95% Wilson lower bound on deadline success above the
-target, and an approximate one-sided 95% upper bound on mean cost below budget.
-The cost bound uses a normal approximation to the sample mean. These are
-separate per-plan screens, **not joint guarantees, simultaneous guarantees
-across all cases, or guarantees under model error**. Do not select/retrain on
-these held-out results and then call them untouched test data. With 32 traces,
-even zero deadline misses would not certify 95% success at this confidence;
-that is why planning does not use the final confidence screen.
-
-Cost is allocated capacity × wall time, including downtime and backup-only
-machines. Replacements retain their slot's price. This is a reserved-capacity
-proxy, not exact spot-instance billing. Persistent storage/egress fees are
-excluded; persistent I/O time is included.
-
-## Saved output, reproducibility and resume
-
-Under `results/pilot/`:
-
-* `manifest.json`: exact config, source hashes, Python/platform metadata.
-* `source/`: a snapshot of the simulator and planners used for that run.
-* `status.json`: current case/method and whether finished, paused or errored.
-* `cases/<case>/case.json`: all machine/workload assumptions.
-* `cases/<case>/plans.json`: selected plans, planning metrics and scores.
-* `cases/<case>/<method>.observations.json`: per-trace outcomes and replay seeds.
-* `cases/<case>/<method>.summary.json`: completed evaluation results.
-* `summary.json`, `summary.csv`: completed comparisons across cases.
-* Plot and paired-comparison files when their notebook cells are run.
-
-Repeated invocations skip completed work. Observations save every 8 traces and
-on a clean interrupt/time pause. A killed process can lose the last unsaved
-batch. The `.run.lock` file prevents competing writers: after a killed kernel,
-confirm the old process has stopped before deleting that file. Normal pauses
-remove it automatically. Changed configuration or core source requires a **new
-output directory**, so incompatible results cannot silently mix.
-
-Fixed seeds make cases and traces reproducible. Time-limited search can examine
-different numbers of candidates on different machines; saved plans are the
-authoritative output. A saved observation can be reproduced with `generate_trace`
-and its `trace_seed`. Resume preserves completed plans. A planner interrupted
-by the overall runner budget is restarted on resume rather than reported as a
-full-budget result.
-
-The notebook exports a ZIP containing configuration, source, plans and results.
-Share that ZIP for analysis. No data are uploaded automatically.
-
-## Interpretation
-
-Use the time–cost scatter **and** feasibility table. A lower time with higher
-cost is a trade-off, not an unconditional improvement. A failed reliability or
-cost screen is not silently excluded from the table. Censored runs have null
-mean completion/cost fields; their restricted mean time and observed cost are
-reported separately. Do not average only successful traces.
-
-Paired bootstrap intervals compare plans on identical exogenous failure traces
-within a case. They quantify Monte Carlo variability conditional on that case
-and simulator, not model uncertainty or all-workload generalization. The
-no-backup ablation's tiny generation latency excludes its parent's search;
-`parent_planning_s` is recorded in `plans.json` and should be charged if that
-placement is used in deployment.
-
-No neural policy is trained in this version. If joint choices show repeatable
-headroom over cheap baselines, the next experiment can test whether learning
-recovers those choices quickly on unseen workloads. If existing replicas make
-extra backups unnecessary, that is an intended possible result.
+See [MODEL.md](MODEL.md) for the state and performance contract. This is a
+synthetic HSDP-style surrogate with fixed blocking recovery policies, simplified
+collectives, and no actual tensors or convergence validation. It is not an
+implementation or comparison of Oobleck, Bamboo, Parcae or LACHESIS, and does not
+establish novelty or real-world speedups. Learning should be tested only after
+repeatable headroom over strong cheap baselines is established.

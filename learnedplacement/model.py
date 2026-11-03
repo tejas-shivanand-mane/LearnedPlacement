@@ -44,6 +44,8 @@ class Case:
     required_success: float = 0.95
     max_simulated_s: float = 8000.0
     regime: str = "custom"
+    profile: str = "reference"
+    trace_key: str = ""
 
     @property
     def shard_gib(self):
@@ -152,7 +154,11 @@ def step_seconds(c, p, groups):
     return compute + c.collective_factor * c.shard_gib / bandwidth
 
 
-def make_case(config, active_nodes, regime, instance):
+def make_case(config, active_nodes, regime, instance, profile=None):
+    if profile is not None:
+        config = dict(config, workload=dict(config["workload"], **profile.get("workload", {})),
+                      deadline_factor=profile.get("deadline_factor", config["deadline_factor"]),
+                      cost_budget_factor=profile.get("cost_budget_factor", config["cost_budget_factor"]))
     rng = random.Random(seed_for(config["seed"], active_nodes, regime, instance))
     count = active_nodes + active_nodes // 2
     nodes = []
@@ -174,6 +180,10 @@ def make_case(config, active_nodes, regime, instance):
              replicas=active_nodes // workload["shards"], regime=regime,
              **workload)
     c.domain_failure_per_hour = 1.0 if regime == "correlated" else 0.0
+    c.trace_key = c.case_id
+    if profile is not None:
+        c.profile = profile["name"]
+        c.case_id += "-" + c.profile
     # Fixed, planner-independent reference: unit-speed job on the required count
     # of $1/hour machines, with the same persistent checkpoint overhead.
     ref_step = c.base_step_s + c.collective_factor*c.shard_gib/(4*c.cross_domain_factor)
@@ -183,3 +193,10 @@ def make_case(config, active_nodes, regime, instance):
     c.max_simulated_s = config["simulation_horizon_factor"] * ref_time
     validate_case(c)
     return c
+
+
+def make_cases(config):
+    return [make_case(config, n, regime, i, profile)
+            for n in config["active_nodes"] for regime in config["regimes"]
+            for i in range(config["instances_per_regime"])
+            for profile in config.get("profiles", [None])]

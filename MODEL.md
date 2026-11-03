@@ -97,8 +97,10 @@ additional backup hosts. It cannot see the sampled future failures.
 
 ## Statistical contract
 
-Every planner gets the same planning trace set. Those traces are not reused for
-reporting. Every frozen plan is evaluated on the same separately seeded test
+Failure-aware planners get the same planning trace set. The explicitly
+failure-unaware control scores the shared candidates with no failure events.
+Its candidate generator also receives zero hazards. Planning traces are not
+reused for reporting. Every frozen plan is evaluated on the same separately seeded test
 traces, including unused-node events. Confidence screens apply to each frozen
 plan under this model, not to a policy trained over the test set.
 
@@ -113,3 +115,25 @@ The default risk rates and performance numbers are synthetic. A useful pilot
 outcome is whether different planners behave sensibly and whether there is
 headroom worth investigating. It is not evidence of real-world speedups,
 guaranteed deadline reliability, or novelty over existing systems.
+
+## V2 experimental controls
+
+The simulator mechanics are unchanged from v1. V2 adds a speed-grouped baseline,
+a risk-neutral shared candidate pool with two scoring objectives, an exact
+placement/no-extra-backup ablation, and a failure-free observation for every
+selected plan. Healthy observations retain all periodic checkpoint and backup
+costs. Failure penalty is the mean under failures minus this healthy time; it
+includes lost work and slower progress as well as explicit recovery phases.
+
+The reference and tighter-budget profiles have identical hardware and recovery
+parameters. A third profile jointly increases persistent I/O, replacement and
+reinitialization costs; it is a combined synthetic stress case, not an isolated
+causal experiment on any one parameter. Profile budgets include their own
+reference checkpoint overhead. See README for exact values and limitations.
+
+Both matched objectives select from exactly the same fully scored candidate
+prefix, recorded with a hash and score audit. Their CPU effort differs because
+failure-free scoring is deterministic and needs one simulation, whereas aware
+scoring averages the planning traces. Candidate generation is independent of
+both objectives and never reads held-out traces. This isolates failure-aware
+scoring within a bounded pool rather than measuring optimal joint planning.

@@ -1,4 +1,7 @@
 """Small algorithmic baselines. No solver or learned policy is used in this pilot."""
+from dataclasses import replace
+import hashlib
+import json
 import random
 import time
 
@@ -9,12 +12,15 @@ from .simulator import BudgetExpired, check_budget, simulate
 
 METHODS = ("speed_first", "reliability_first", "separate", "domain_packed",
            "joint_greedy", "joint_local", "joint_local_no_backup")
+SIMPLE_METHODS = METHODS[:4] + ("speed_grouped",)
+MATCHED_METHODS = ("matched_failure_aware", "matched_failure_unaware", "matched_no_backup")
+ALL_METHODS = METHODS + ("speed_grouped",) + MATCHED_METHODS
 
 
 def initial(c, kind):
     eligible = [i for i, n in enumerate(c.nodes)
                 if n.memory_gib >= c.shard_gib+c.working_gib]
-    if kind == "speed_first":
+    if kind in ("speed_first", "speed_grouped"):
         key = lambda i: (-c.nodes[i].speed, c.nodes[i].price_per_hour, i)
     elif kind in ("reliability_first", "domain_packed"):
         key = lambda i: (c.nodes[i].failure_per_hour, -c.nodes[i].speed,
@@ -25,8 +31,11 @@ def initial(c, kind):
     selected = sorted(eligible, key=key)[:c.replicas*c.shards]
     if len(selected) != c.replicas*c.shards:
         raise ValueError("No structurally valid initial training layout")
-    if kind == "domain_packed":
-        selected.sort(key=lambda i: (c.nodes[i].domain, key(i)))
+    if kind in ("domain_packed", "speed_grouped"):
+        if kind == "domain_packed":
+            selected.sort(key=lambda i: (c.nodes[i].domain, key(i)))
+        # speed_grouped retains descending speed order: similar-speed machines
+        # share a group instead of spreading the fastest across bottlenecks.
         groups = [selected[i*c.shards:(i+1)*c.shards] for i in range(c.replicas)]
     else:
         groups = [[] for _ in range(c.replicas)]
@@ -92,7 +101,18 @@ def neighbor(c, p, rng):
 
 def plan_method(c, method, traces, config, prior, stop_at=None):
     started = time.monotonic()
-    if method in ("speed_first", "reliability_first", "separate", "domain_packed"):
+    if method == "matched_failure_aware":
+        return matched_search(c, traces, config, stop_at)
+    if method == "matched_failure_unaware":
+        return prior["matched_failure_aware"]["unaware_result"]
+    if method == "matched_no_backup":
+        parent = prior["matched_failure_aware"]
+        p = Plan.from_dict(parent["plan"])
+        return dict(plan=Plan(p.groups).to_dict(), planning_s=time.monotonic()-started,
+                    candidates=0, simulations=0, status="placement_matched_ablation",
+                    parent="matched_failure_aware", parent_planning_s=parent["planning_s"],
+                    search_summary=None)
+    if method in SIMPLE_METHODS:
         plain = initial(c, method)
         protected = add_backups(c, plain)
         # Give simple baselines a fair chance to reject unnecessary backups.
@@ -114,6 +134,8 @@ def plan_method(c, method, traces, config, prior, stop_at=None):
                     candidates=0, simulations=0, status="placement_matched_ablation",
                     parent="joint_local", parent_planning_s=prior["joint_local"]["planning_s"],
                     search_summary=None)
+    if method not in ("joint_greedy", "joint_local"):
+        raise ValueError(f"Unknown method: {method}")
     limit = config["greedy_candidates"] if method == "joint_greedy" else config["local_candidates"]
     seconds = config["greedy_seconds"] if method == "joint_greedy" else config["local_seconds"]
     local_stop = started + seconds
@@ -159,3 +181,78 @@ def plan_method(c, method, traces, config, prior, stop_at=None):
                 candidates=evaluated, simulations=simulations, proposal_attempts=attempts,
                 status=status, search_summary=best_summary,
                 planning_point_feasible=best_summary["point_estimate_feasible"] if best_summary else None)
+
+
+def matched_search(c, traces, config, stop_at=None):
+    """Two objectives, exactly the same completed candidate prefix.
+
+    Proposals see zero hazards, no planning outcomes, and no held-out traces.
+    Both scorers finish a candidate before either incumbent can change. Thus
+    a wall-clock interruption cannot give one scorer additional candidates.
+    This is bounded shared-pool search, not adaptive hill climbing or an oracle.
+    """
+    started = time.monotonic()
+    local_stop = started + config["matched_seconds"]
+    effective_stop = min(local_stop, stop_at) if stop_at is not None else local_stop
+    neutral = replace(c, nodes=[replace(n, failure_per_hour=0.) for n in c.nodes],
+                      domain_failure_per_hour=0.)
+    rng = random.Random(seed_for(config["seed"], c.trace_key or c.case_id, "matched_candidates"))
+    plain_seeds = list(dict.fromkeys(initial(neutral, k) for k in
+                                    ("speed_grouped", "speed_first", "separate", "domain_packed")))
+    seeds = plain_seeds + [add_backups(neutral, p) for p in plain_seeds]
+    limit = config["matched_candidates"]
+    pool, seen, audit = [], set(), []
+    best = [plain_seeds[0], plain_seeds[0]]
+    summaries, scores = [None, None], [None, None]
+    scoring_s, simulations = [0., 0.], [0, 0]
+    attempts = 0
+    search_status = "candidate_limit"
+    try:
+        while len(pool) < limit and attempts < max(100, limit*30):
+            check_budget(effective_stop)
+            q = seeds[attempts] if attempts < len(seeds) else neighbor(neutral, rng.choice(pool or plain_seeds), rng)
+            attempts += 1
+            if q in seen or violations(c, q):
+                continue
+            seen.add(q)
+            tick = time.monotonic()
+            healthy = simulate(neutral, q, [], effective_stop)
+            scoring_s[1] += time.monotonic()-tick
+            simulations[1] += 1
+            tick = time.monotonic()
+            rows = []
+            try:
+                for trace in traces:
+                    rows.append(simulate(c, q, trace, effective_stop))
+                    simulations[0] += 1
+            finally:
+                scoring_s[0] += time.monotonic()-tick
+            pair = [summarize(c, rows), summarize(c, [healthy])]
+            candidate_scores = [planning_score(c, s) for s in pair]
+            pool.append(q)
+            audit.append(dict(plan=q.to_dict(), aware_score=candidate_scores[0],
+                              unaware_score=candidate_scores[1]))
+            for i in range(2):
+                if scores[i] is None or candidate_scores[i] < scores[i]:
+                    best[i], scores[i], summaries[i] = q, candidate_scores[i], pair[i]
+        if len(pool) < limit:
+            search_status = "proposal_limit"
+    except BudgetExpired:
+        search_status = "wall_clock_limit"
+    elapsed = time.monotonic()-started
+    digest = hashlib.sha256(json.dumps([p.to_dict() for p in pool], sort_keys=True).encode()).hexdigest()
+    # Timing is scorer work plus shared generation/bookkeeping, not a claim of
+    # equal CPU effort. The deterministic healthy objective needs one simulation.
+    shared_s = max(0., elapsed-sum(scoring_s))
+    results = [dict(plan=best[i].to_dict(), planning_s=scoring_s[i]+shared_s,
+                    scoring_s=scoring_s[i], shared_overhead_s=shared_s,
+                    paired_search_wall_s=elapsed, candidates=len(pool), simulations=simulations[i],
+                    status=search_status, proposal_attempts=attempts,
+                    candidate_pool_sha256=digest,
+                    objective="failure_aware" if i == 0 else "failure_free",
+                    search_summary=summaries[i],
+                    planning_point_feasible=summaries[i]["point_estimate_feasible"] if summaries[i] else None)
+               for i in range(2)]
+    results[0]["unaware_result"] = results[1]
+    results[0]["candidate_audit"] = audit
+    return results[0]
