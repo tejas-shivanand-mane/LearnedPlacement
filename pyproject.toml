@@ -5,12 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "learnedplacement"
 version = "0.1.0"
-description = "CPU-only pilot for joint sharded-state placement and protection"
+description = "Local pilot for joint sharded-state placement and protection"
 requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
 learning = ["numpy>=1.24"]
+architecture = ["numpy>=1.24", "torch>=2.2"]
 notebook = ["jupyterlab", "ipykernel", "matplotlib>=3.6", "pandas>=1.5"]
 
 [tool.setuptools.packages.find]

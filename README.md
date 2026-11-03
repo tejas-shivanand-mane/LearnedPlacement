@@ -1,36 +1,42 @@
 # LearnedPlacement
 
-A local CPU simulator for resource, placement, checkpoint and recovery planning.
-**Pilot v7 trains RL policies across small and large configurations**, validates
-saved checkpoints, compares three training settings and evaluates selected models
-against the original small-trained models and nonlearned baselines. Workloads are
-simulated; planner networks really train. No Ray, cloud, GPU or solver is required.
+A local simulator for resource, placement, checkpoint and recovery planning.
+**Pilot V8 compares an MLP, a set encoder and a heterogeneous GNN**, using matched
+REINFORCE training budgets and separately selected direct/top-eight checkpoints.
+It also diagnoses candidate-pool feasibility under adverse networks and varies
+latency independently of bandwidth. Distributed workloads remain simulated;
+planner networks really train. No Ray, cloud or solver is required.
 
 ## Run locally
 
 ```bash
 git pull --ff-only
 source .venv/bin/activate
-python -m pip install -e '.[notebook,learning]'
+python -m pip install -e '.[notebook,architecture]'
 python -m jupyter lab notebooks/PlacementPilot.ipynb
 ```
 
-Python 3.10+ is required. Restart the kernel after pulling. The notebook has
-separate train/resume and evaluate/resume cells, four configurable CPU workers,
-and **no mandatory timeout** (`MAX_MINUTES=None`). Defaults: 3 settings × 3 seeds,
-checkpoints at 2,048/4,096/8,192/16,384 episodes and pools of 6/12/24/32/64/96
-machines. Validation chooses one setting/episode shared by all seeds. Test data
-is not used during tuning. The original reward is unchanged.
+Python 3.10+ is required. Restart the kernel after pulling. `DEVICE="auto"` uses
+CUDA when available, otherwise CPU; use a compatible CUDA PyTorch build for GPU
+training. One process owns the GPU and four CPU workers simulate sampled actions.
+Evaluation uses CPU inference consistently across all models. No graph framework
+or additional GPU is required. **No mandatory time limit** (`MAX_MINUTES=None`).
 
-After training, set `SOURCE_RUN` to your completed original v5 results folder
-(the analysis ZIP has no weights). Run the fresh validation comparison with both
-model families, random/analytical top-eight baselines and full/local search.
-Share the two compact ZIPs from the export cell. See [the v7 design](docs/PILOT_V7.md)
-for exact budgets, source checks, selection rules and limitations.
+Run the network diagnostic cell, then the train/resume cell. Defaults: 3 encoders
+× 3 seeds, 2,048/4,096/8,192-episode checkpoints and pools of 6–96 machines. The
+six profiles include 1 ms versus 10 ms latency and separate bandwidth reductions.
+Selection uses validation only; keep final test untouched. The reward is unchanged.
 
-The earlier workflows remain in `notebooks/PlacementPilotV5.ipynb` and
-`notebooks/PlacementPilotV6.ipynb`. Original outputs are preserved. Source or
-configuration changes require a new run directory; rerun unchanged to resume.
+The comparison cell defaults to including original and tuned MLPs from
+`results/pilot_v7_models_w4`. Set `LEGACY_SOURCE` to your actual V7 models folder;
+an analysis ZIP has no weights. Explicitly set it to `None` to omit historical
+policies. Share the two compact ZIPs from the export cell. See
+[the V8 protocol](docs/PILOT_V8.md) for budgets, architecture details, latency
+assumptions, source checks and limitations. Full research runs are left for you.
+
+V7 is preserved in `notebooks/PlacementPilotV7.ipynb`; earlier V5/V6 notebooks
+also remain available. Original results are preserved. Source/configuration or
+dependency changes require a new output directory; rerun unchanged to resume.
 
 ## What v5 compares
 
@@ -68,6 +74,6 @@ Old results remain readable; fingerprints prevent mixing source versions.
 python -m unittest discover -s tests -v
 ```
 
-Learning tests require the `learning` extra. Tests use tiny deterministic fixtures
+Learning tests require the `learning` extra; V8 tests require `architecture`. Tests use tiny deterministic fixtures
 and synthetic gradient checks; full research training and evaluation are left for
 the user to run.

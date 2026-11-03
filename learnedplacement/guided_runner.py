@@ -32,9 +32,12 @@ def method_specs(config):
     for k in g['top_k']: specs[f'random_top{k}']=dict(kind='random',k=k)
     if g.get('heuristic_ranker'):
         for k in g['top_k']:specs[f'heuristic_top{k}']=dict(kind='heuristic',k=k)
-    for seed in config['learning']['seeds']:
-        specs[f'rl_{seed}']=dict(kind='direct',seed=seed)
-        for k in g['top_k']: specs[f'rl_{seed}_top{k}']=dict(kind='ranked',seed=seed,k=k)
+    if 'architecture_models' in config:
+        specs.update(config['architecture_models'])
+    else:
+        for seed in config['learning']['seeds']:
+            specs[f'rl_{seed}']=dict(kind='direct',seed=seed)
+            for k in g['top_k']: specs[f'rl_{seed}_top{k}']=dict(kind='ranked',seed=seed,k=k)
     # The original portfolio pipeline has at most 1+24+64+64 evaluations.
     specs['local_reference']=dict(kind='local',seed=None,cap=1+config['tuned_candidates']+2*config['search_candidates'],seconds=None)
     if g.get('ranking_only'):return specs
@@ -81,7 +84,7 @@ def find_model_run(results):
 
 def load_source(source,c):
     source=Path(source).resolve();m=read_json(source/'manifest.json')
-    if m.get('experiment')=='comparison_v7':
+    if m.get('experiment') in ('comparison_v7','comparison_v8'):
         bundle=read_json(source/'comparison_policies.json')
         if digest(bundle)!=m['bundle_sha256']:raise ValueError('Comparison policy bundle changed')
         if bundle['feature_version']!=FEATURE_VERSION:raise ValueError('Feature version mismatch')
@@ -90,6 +93,10 @@ def load_source(source,c):
         if set(map(str,c['learning']['seeds']))!=set(bundle['actors']):raise ValueError('Retain all old and selected model seeds')
         for name in ('learnedplacement/learning.py','learnedplacement/expanded.py','learnedplacement/metrics.py'):
             if hashlib.sha256((ROOT/name).read_bytes()).hexdigest()!=m['sources'].get(name):raise ValueError('Incompatible model source')
+        if m['experiment']=='comparison_v8':
+            for name in ('learnedplacement/architecture.py','learnedplacement/architecture_runner.py'):
+                if hashlib.sha256((ROOT/name).read_bytes()).hexdigest()!=m['sources'].get(name):raise ValueError('Incompatible architecture source')
+            if c.get('architecture_models')!=bundle['model_specs']:raise ValueError('Selected model modes changed')
         return bundle
     if m.get('experiment')!='learning_v5':raise ValueError('SOURCE_RUN must be a v5 run or frozen v7 comparison folder, not an analysis ZIP')
     for name in ('learnedplacement/learning.py','learnedplacement/expanded.py','learnedplacement/metrics.py'):
@@ -121,7 +128,11 @@ def prepare(c,output,source_run=None):
         if source_run is None:raise ValueError('SOURCE_RUN required on first invocation')
         bundle=load_source(source_run,c)
     sources=source_snapshot();hashes={k:hashlib.sha256(v.encode()).hexdigest() for k,v in sources.items()}
-    fingerprint=digest(dict(config=c,sources=hashes,models=digest(bundle),numpy=np.__version__))
+    dependencies=dict(numpy=np.__version__)
+    if 'architecture_models' in c:
+        import torch
+        dependencies['torch']=str(torch.__version__)
+    fingerprint=digest(dict(config=c,sources=hashes,models=digest(bundle),**dependencies))
     path=output/'manifest.json'
     if path.exists():
         m=read_json(path)
@@ -133,7 +144,8 @@ def prepare(c,output,source_run=None):
     for s in scenarios:
         p=base_plan(s,c)
         for actor in bundle['actors'].values():
-            if Network.from_dict(actor).params['w'].shape[0]!=len(features(s,p)):raise ValueError('Feature dimension mismatch')
+            dimension=actor['dimension'] if 'architecture_version' in actor else Network.from_dict(actor).params['w'].shape[0]
+            if dimension!=len(features(s,p)):raise ValueError('Feature dimension mismatch')
         atomic_json(output/'scenario_inputs'/f'{s.workload.case_id}.json',s.to_dict())
     for name,content in sources.items():
         dest=output/'source'/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_text(content)
@@ -157,7 +169,13 @@ class Experiment:
         bundle=read_json(self.root/'frozen_policies.json')
         m=read_json(self.root/'manifest.json')
         if digest(bundle)!=m['frozen_policies_sha256']:raise ValueError('Frozen policies changed')
-        self.actors=bundle['actors'];self.models={int(k):Network.from_dict(v) for k,v in self.actors.items()}
+        self.actors=bundle['actors']
+        if any('architecture_version' in v for v in self.actors.values()):
+            import torch
+            from .architecture import load_actor
+            torch.set_num_threads(1)
+            self.models={int(k):load_actor(v) for k,v in self.actors.items()}
+        else:self.models={int(k):Network.from_dict(v) for k,v in self.actors.items()}
 
     def prepare_worker(self,c,output):
         self.output=output;m=read_json(self.root/'manifest.json');cid=output.name
@@ -233,7 +251,11 @@ class Experiment:
                 pool_hash=digest([p.to_dict() for p in pool]);pool_size=len(pool)
                 indices=list(range(len(pool)))
                 if spec.get('seed') is not None:
-                    seed=spec['seed'];scores,_=self.models[seed].forward(matrix(s,pool))
+                    seed=spec['seed']
+                    if 'architecture_version' in self.actors[str(seed)]:
+                        from .architecture import score_actor
+                        scores=score_actor(self.models[seed],s,pool)
+                    else:scores,_=self.models[seed].forward(matrix(s,pool))
                     indices=sorted(indices,key=lambda i:(-float(scores[i]),i));model_hash=digest(self.actors[str(seed)])
                 elif spec['kind']=='heuristic':
                     from .ranking import heuristic_score

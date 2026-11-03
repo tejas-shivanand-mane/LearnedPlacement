@@ -90,7 +90,14 @@ def prepare(c,out):
 
 def checkpoint_validation(root,job,c,episode,actor,stop_at=None):
     root=Path(root);directory=root/'jobs'/job/'validation'/str(episode)
-    model_hash=digest(actor);net=Network.from_dict(actor);t=c['tuning'];records=[]
+    model_hash=digest(actor);t=c['tuning'];records=[]
+    if 'architecture_version' in actor:
+        from .architecture import load_actor,score_actor
+        net=load_actor(actor)
+        score=lambda s,pool:score_actor(net,s,pool)
+    else:
+        net=Network.from_dict(actor)
+        score=lambda s,pool:net.forward(matrix(s,pool))[0]
     raw=read_json(root/'validation_scenarios.json')
     if digest(raw)!=read_json(root/'manifest.json')['validation_sha256']:raise ValueError('Validation inputs changed')
     for value in raw:
@@ -101,7 +108,7 @@ def checkpoint_validation(root,job,c,episode,actor,stop_at=None):
         if record['model_sha256']!=model_hash:raise ValueError('Validation model changed')
         if record.get('finished'):
             records.append(record['summary']);continue
-        pool=action_pool(s,c);scores,_=net.forward(matrix(s,pool));order=sorted(range(len(pool)),key=lambda i:(-float(scores[i]),i))
+        pool=action_pool(s,c);scores=score(s,pool);order=sorted(range(len(pool)),key=lambda i:(-float(scores[i]),i))
         signature=digest([p.to_dict() for p in pool])
         if record.get('pool_sha256',signature)!=signature:raise ValueError('Validation pool changed')
         record['pool_sha256']=signature
