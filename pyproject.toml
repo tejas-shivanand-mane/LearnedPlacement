@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "learnedplacement"
+version = "0.1.0"
+description = "CPU-only pilot for joint sharded-state placement and protection"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+notebook = ["jupyterlab", "ipykernel", "matplotlib>=3.6", "pandas>=1.5"]
+
+[tool.setuptools.packages.find]
+include = ["learnedplacement*"]
+
