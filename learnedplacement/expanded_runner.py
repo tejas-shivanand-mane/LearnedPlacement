@@ -111,9 +111,12 @@ def build_summary(output):
     return results
 
 
-def run(config=None, output='results/pilot_v4', max_minutes=30, config_path=None):
+def run(config=None, output='results/pilot_v4', max_minutes=30, config_path=None,
+        prepare_fn=None, plan_fn=None, before_evaluate=None, trace_namespace='v4'):
     if not isinstance(max_minutes,(int,float)) or not 0 < max_minutes <= 30:
         raise ValueError('max_minutes must be in (0,30]')
+    prepare_fn = prepare_fn or prepare
+    plan_fn = plan_fn or plan
     cfg = config if config is not None else read_json(config_path or ROOT/'configs/pilot_v4.json')
     output = Path(output).resolve(); output.mkdir(parents=True,exist_ok=True)
     lock = output/'.run.lock'
@@ -124,8 +127,11 @@ def run(config=None, output='results/pilot_v4', max_minutes=30, config_path=None
     current = {}
     prepared = False
     try:
-        m = prepare(cfg,output); prepared = True
+        m = prepare_fn(cfg,output); prepared = True
         atomic_json(output/'status.json',dict(state='running'))
+        if before_evaluate is not None:
+            current = dict(stage='training')
+            before_evaluate(cfg,output,stop_at)
         for cid in m['cases']:
             check_budget(stop_at)
             d = output/'cases'/cid
@@ -139,9 +145,9 @@ def run(config=None, output='results/pilot_v4', max_minutes=30, config_path=None
                 check_budget(stop_at)
                 if method not in selected:
                     if planning_traces is None and method != 'random_unaware':
-                        planning_traces = [generate_trace(s,seed_for(cfg['seed'],c.trace_key,'v4-planning',i),stop_at) for i in range(cfg['planning_traces'])]
+                        planning_traces = [generate_trace(s,seed_for(cfg['seed'],c.trace_key,trace_namespace+'-planning',i),stop_at) for i in range(cfg['planning_traces'])]
                     print(f'{cid}: planning {method}',flush=True)
-                    record = plan(s,method,planning_traces,cfg,selected,stop_at)
+                    record = plan_fn(s,method,planning_traces,cfg,selected,stop_at)
                     check_budget(stop_at)
                     selected[method] = record; atomic_json(selected_path,selected)
                 p = Decision.from_dict(selected[method]['plan'])
@@ -155,7 +161,7 @@ def run(config=None, output='results/pilot_v4', max_minutes=30, config_path=None
                 try:
                     for i in range(len(rows),cfg['evaluation_traces']):
                         check_budget(stop_at)
-                        seed = seed_for(cfg['seed'],c.trace_key,'v4-evaluation',i)
+                        seed = seed_for(cfg['seed'],c.trace_key,trace_namespace+'-evaluation',i)
                         if i not in eval_cache: eval_cache[i] = generate_trace(s,seed,stop_at)
                         row = simulate(s,p,eval_cache[i],stop_at)
                         rows.append(dict(trace_index=i,trace_seed=seed,**row))
@@ -194,12 +200,13 @@ def run(config=None, output='results/pilot_v4', max_minutes=30, config_path=None
     return status(output)
 
 
-def plot_results(output, profile=None, reference_nodes=None):
+def plot_results(output, profile=None, reference_nodes=None, split=None):
     """Read-only dot plots; no vertical bars or bottom captions."""
     import pandas as pd
     import matplotlib.pyplot as plt
     df = pd.DataFrame(read_json(Path(output)/'summary.json')['results'])
     if df.empty: print('No completed results yet.'); return df
+    if split is not None: df = df[df.split == split]
     if profile is not None: df = df[df.profile == profile]
     if reference_nodes is not None: df = df[df.reference_nodes == reference_nodes]
     if df.empty: return df
@@ -212,7 +219,7 @@ def plot_results(output, profile=None, reference_nodes=None):
                                   mean_observed_cost_usd=('mean_observed_cost_usd','mean'),
                                   planning_s=('planning_s','mean'),screen_rate=('statistical_screen_passed','mean'),
                                   censored_traces=('censored_traces','sum')).reindex(methods)
-    fig, axes = plt.subplots(1,3,figsize=(13,4),layout='constrained')
+    fig, axes = plt.subplots(1,3,figsize=(13,max(4,.4*len(methods))),layout='constrained')
     for ax,key,title in zip(axes,('restricted_mean_s','mean_observed_cost_usd','planning_s'),
                            ('Observed execution time (s)','Observed cost ($)','Planning time (s)')):
         ax.scatter(avg[key],avg.index)

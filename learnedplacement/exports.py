@@ -43,6 +43,12 @@ def analysis_bundle(output):
                 record['evaluation_finished'] = len(rows) == manifest['config']['evaluation_traces']
             if record:
                 methods[method] = record
+        if manifest.get('experiment') == 'learning_v5':
+            matched = [m for m in methods if m in ('random_search', 'random_unaware', 'supervised_control') or m.startswith('rl_seed_')]
+            pools = {(methods[m]['selection']['candidate_pool_sha256'], methods[m]['selection']['candidates'])
+                     for m in matched if 'selection' in methods[m]}
+            if len(pools) > 1:
+                raise ValueError(f'Learning action pool mismatch: {cid}')
         pairs = []
         for selected, baseline in itertools.combinations(observations, 2):
             a, b = observations[selected], observations[baseline]
@@ -76,7 +82,10 @@ def analysis_bundle(output):
                 pair['failure_penalty_approximate_mean_ci95'] = [v-delta for v in interval] if interval else None
             pairs.append(pair)
         cases.append(dict(case=read_json(directory/'case.json'), methods=methods, paired_comparisons=pairs))
+    learning_path = output/'learning_summary.json'
+    learning = read_json(learning_path) if learning_path.exists() else None
     return dict(format='learnedplacement-analysis', schema=1, manifest=manifest,
+                learning=learning,
                 status=status(output),
                 interpretation={
                     'difference_direction': 'selected minus baseline; negative time/cost favors selected',

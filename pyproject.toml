@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
+learning = ["numpy>=1.24"]
 notebook = ["jupyterlab", "ipykernel", "matplotlib>=3.6", "pandas>=1.5"]
 
 [tool.setuptools.packages.find]

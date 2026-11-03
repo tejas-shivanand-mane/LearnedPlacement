@@ -1,0 +1,171 @@
+{
+  "seed": 20261106,
+  "active_nodes": [
+    4,
+    8,
+    16
+  ],
+  "regimes": [
+    "homogeneous",
+    "cheap_risky",
+    "fast_risky",
+    "correlated"
+  ],
+  "instances_per_regime": 6,
+  "planning_traces": 32,
+  "evaluation_traces": 256,
+  "save_every_traces": 8,
+  "deadline_factor": 1.75,
+  "cost_budget_factor": 1.5,
+  "simulation_horizon_factor": 32.0,
+  "workload": {
+    "shards": 4,
+    "state_gib": 16.0,
+    "working_gib": 4.0,
+    "steps": 240,
+    "base_step_s": 3.0,
+    "collective_factor": 0.12,
+    "cross_domain_factor": 0.55,
+    "storage_gib_s": 2.0,
+    "backup_every": 20,
+    "checkpoint_every": 80,
+    "backup_budget_gib": 32.0,
+    "detection_s": 2.0,
+    "reinit_s": 4.0,
+    "replacement_s": 30.0,
+    "required_success": 0.95
+  },
+  "methods": [
+    "speed_fixed",
+    "domain_tuned",
+    "coordinate_search",
+    "heuristic_portfolio",
+    "local_search",
+    "random_search",
+    "random_unaware",
+    "rl_seed_11",
+    "rl_seed_29",
+    "rl_seed_47",
+    "supervised_control"
+  ],
+  "experiment": "learning_v5",
+  "instance_splits": [
+    "train",
+    "train",
+    "train",
+    "train",
+    "validation",
+    "test"
+  ],
+  "search_candidates": 64,
+  "tuned_candidates": 24,
+  "planner_seconds": 20.0,
+  "expanded_profiles": [
+    {
+      "name": "reference",
+      "description": "Heterogeneous memory and NICs; fixed outage duration."
+    },
+    {
+      "name": "slow_io",
+      "description": "Only remote storage bandwidth is reduced; budgets unchanged.",
+      "storage_multiplier": 0.125
+    },
+    {
+      "name": "slow_network",
+      "description": "Only cross-domain network bandwidth is reduced; budgets unchanged.",
+      "network_multiplier": 0.5
+    },
+    {
+      "name": "variable_repair",
+      "description": "Lognormal outage duration with the same mean.",
+      "environment": {
+        "outage_distribution": "lognormal",
+        "outage_cv": 1.0
+      }
+    }
+  ],
+  "choices": {
+    "shards": [
+      2,
+      4,
+      8
+    ],
+    "replicas": [
+      1,
+      2,
+      4
+    ],
+    "backup_copies": [
+      0,
+      1,
+      2
+    ],
+    "spare_count": [
+      0,
+      1,
+      2
+    ],
+    "checkpoint_every": [
+      20,
+      40,
+      80,
+      240
+    ],
+    "backup_every": [
+      10,
+      20,
+      80
+    ],
+    "checkpoint_tier": [
+      "remote",
+      "local"
+    ],
+    "checkpoint_mode": [
+      "sync",
+      "async"
+    ],
+    "checkpoint_retention": [
+      1,
+      2
+    ],
+    "background_fraction": [
+      0.25,
+      0.5
+    ],
+    "recovery": [
+      "eager",
+      "defer"
+    ],
+    "repair_every": [
+      1,
+      20
+    ],
+    "recovery_order": [
+      "fastest",
+      "smallest"
+    ],
+    "source_policy": [
+      "balanced",
+      "first"
+    ]
+  },
+  "learning": {
+    "seeds": [
+      11,
+      29,
+      47
+    ],
+    "episodes": 2048,
+    "rollouts_per_episode": 8,
+    "action_count": 64,
+    "hidden": 32,
+    "learning_rate": 0.001,
+    "entropy": 0.01,
+    "history_every": 128,
+    "penalties": {
+      "cost": 20.0,
+      "deadline": 20.0,
+      "censor": 100.0
+    }
+  }
+}

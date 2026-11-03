@@ -153,16 +153,18 @@ def neighbors(s, p, config):
             if not violations(s,q): yield q
 
 
-def plan(s, method, traces, config, prior=None, stop_at=None):
+def plan(s, method, traces, config, prior=None, stop_at=None, initial_plan=None, score_fn=None):
     """Wall-clock and completed-candidate bounded; partial candidate scores discarded."""
     prior = prior or {}
+    score_fn = score_fn or planning_score
     if method == 'random_unaware':
         if 'random_search' not in prior: raise ValueError('random_search must run first')
         return prior['random_search']['controls']['random_unaware']
     if method not in METHODS: raise ValueError('Unknown planner')
     started = time.monotonic()
     limit = min(started+config['planner_seconds'],stop_at) if stop_at is not None else started+config['planner_seconds']
-    fallback = base_plan(s,config,domain=method != 'speed_fixed')
+    fallback = initial_plan or base_plan(s,config,domain=method != 'speed_fixed')
+    if violations(s,fallback): raise ValueError('Invalid initial plan')
     best, best_score, best_summary = fallback,None,None
     healthy_best, healthy_score = fallback,None
     rng = random.Random(seed_for(config['seed'],s.workload.case_id,method))
@@ -215,8 +217,8 @@ def plan(s, method, traces, config, prior=None, stop_at=None):
             finally:
                 aware_s += time.monotonic()-tick
             summary = summarize(s.workload,rows)
-            score = planning_score(s.workload,summary)
-            hscore = planning_score(s.workload,summarize(s.workload,[healthy]))
+            score = score_fn(s.workload,summary)
+            hscore = score_fn(s.workload,summarize(s.workload,[healthy]))
             audit.append(dict(plan=q.to_dict(),score=list(score),healthy_score=list(hscore)))
             if best_score is None or score < best_score:
                 best,best_score,best_summary = q,score,summary; changed = True

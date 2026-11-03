@@ -1,65 +1,70 @@
 # LearnedPlacement
 
-A local CPU simulator for joint training-resource, placement, checkpoint and
-recovery planning. **Pilot v4 broadens the decision space before testing RL.**
-No Ray, GPU, cloud account, Z3 or actual model training is required.
+A local CPU simulator for resource, placement, checkpoint and recovery planning.
+**Pilot v5 trains and compares RL plan selectors**, with a simulation horizon
+increased from 8× to **32×** reference time. No Ray, GPU, cloud or Z3 is required.
+The planner networks train; the distributed training workload remains simulated.
 
 ## Run locally
 
 ```bash
 git pull --ff-only
 source .venv/bin/activate
-python -m pip install -e '.[notebook]'
+python -m pip install -e '.[notebook,learning]'
 python -m jupyter lab notebooks/PlacementPilot.ipynb
 ```
 
-Python 3.10+ is required. For a fresh checkout, clone this repository and create
-`.venv` with `python3 -m venv .venv` first. Restart the kernel after pulling.
-The default output is **`results/pilot_v4`**; old results are preserved.
-Read the editable configuration cell before running. Only Run/resume starts work.
+Python 3.10+ is required. For a fresh checkout, create `.venv` with
+`python3 -m venv .venv` first. Restart the notebook kernel after pulling.
+The new output is **`results/pilot_v5`**. Only Run/resume starts work.
 
 ```bash
-python -m learnedplacement.expanded_runner --config configs/pilot_v4.json --output results/pilot_v4 --max-minutes 30
-python -m learnedplacement.expanded_runner --output results/pilot_v4 --status
+python -m learnedplacement.learning_runner --config configs/pilot_v5.json --output results/pilot_v5 --max-minutes 30
+python -m learnedplacement.learning_runner --output results/pilot_v5 --status
 ```
 
-Each invocation stops at a cooperative 30-minute cap and saves progress. Rerun
-unchanged to resume. The full 144-case matrix may need several invocations; the
-notebook documents a 48-case starting subset. Plots and compact export read saved
-files without starting simulations. Share **`pilot_v4.analysis.zip`**, not the raw
-results directory. Changed configuration/source requires a new run directory.
+Training and evaluation pause after 30 real minutes per invocation, with saved
+weights, optimizer states and simulation progress. Rerun unchanged to resume.
+The complete experiment may require several invocations. Config/source/NumPy
+changes require a new run directory. The notebook provides a smaller first-run
+option. Deadlines and budgets are unchanged despite the longer horizon.
 
-## What changed
+## What v5 compares
 
-V4 chooses worker count and type (through node selection), sharding degree,
-replica groups, shard positions, extra backups and their refresh rate, reserved
-spares, checkpoint interval/tier/overlap/retention, and recovery admission, order,
-source selection and repair boundaries. Cases vary memory, network, storage and
-repair conditions. Training work is held constant across allocations.
+Three independent **REINFORCE contextual-bandit policies** choose a complete
+feasible plan from a common candidate set. They learn from simulator rewards,
+not optimal labels. After training, selection needs no simulator calls. This is
+a first RL comparison, not a dynamic controller that replans during failures.
 
-It compares speed grouping, a stronger domain-aware tuned heuristic, coordinate
-search, random search, local search and a matched failure-unaware selector.
-Plans are evaluated on fresh paired failure traces. Case-level splits and a
-feasible candidate interface prepare for later learning; **RL is not implemented
-or trained in this pilot**. These baselines are not published-system reproductions.
+Comparators include speed grouping, a tuned domain-aware heuristic, coordinate
+search, a heuristic portfolio, stronger initialized local search, matched-pool
+failure-aware/unaware search, and a supervised reward-prediction control. All
+failure-aware selectors use a shared penalized completion-time objective.
+Structural feasibility is checked; stochastic deadline/budget guarantees are not
+claimed. Train/validation/test cases and failure seeds are separated. Policies
+freeze before validation/test; report all three learning seeds.
 
-See [the complete experiment description](docs/PILOT_V4.md) for variables,
-objective, constraints, profiles, budgets, comparison fairness and limitations.
-The simulator is an uncalibrated analytical model; it does not establish real
-HSDP performance or publication novelty. Tensor/pipeline parallelism, training
-batch changes, asynchronous replica catch-up and multi-job scheduling are staged
-for later modeling rather than represented by unsupported flags.
+See [the complete v5 experiment](docs/PILOT_V5.md) for exact rewards, sample counts,
+resume semantics, limitations and timing definitions. The simulator is still an
+uncalibrated fixed-work model, not measured HSDP execution or a reproduction of
+published systems. It does not yet model tensor/pipeline parallelism or multi-job
+scheduling.
+
+Share **`pilot_v5.analysis.zip`**. The compact export contains selected plans,
+paired summaries and learning diagnostics; raw observations and weights stay local.
 
 ## Previous experiments and checks
 
-V3 remains available in `notebooks/PlacementPilotV3.ipynb`, `configs/pilot_v3.json`
-and `python -m learnedplacement.runner`. See [v3 documentation](docs/PILOT_V3.md)
-and [the original simulator model](MODEL.md). Old result files are readable;
-source fingerprints intentionally prevent mixing old and updated runs.
+V4 remains available as `notebooks/PlacementPilotV4.ipynb`, `configs/pilot_v4.json`
+and `python -m learnedplacement.expanded_runner`; see [v4 documentation](docs/PILOT_V4.md).
+V3 remains in `notebooks/PlacementPilotV3.ipynb` and `python -m learnedplacement.runner`;
+see [v3 documentation](docs/PILOT_V3.md) and [the original model](MODEL.md).
+Old results remain readable; fingerprints prevent mixing source versions.
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-Tests use tiny deterministic simulations and temporary result directories.
-The full research experiment is left for the user to run.
+Learning tests require the `learning` extra. Tests use tiny deterministic fixtures
+and synthetic gradient checks; full research training and evaluation are left for
+the user to run.
