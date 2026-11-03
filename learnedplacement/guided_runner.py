@@ -30,11 +30,14 @@ from .simulator import BudgetExpired, check_budget
 def method_specs(config):
     g=config['guided']; specs={'pool_search':dict(kind='pool')}
     for k in g['top_k']: specs[f'random_top{k}']=dict(kind='random',k=k)
+    if g.get('heuristic_ranker'):
+        for k in g['top_k']:specs[f'heuristic_top{k}']=dict(kind='heuristic',k=k)
     for seed in config['learning']['seeds']:
         specs[f'rl_{seed}']=dict(kind='direct',seed=seed)
         for k in g['top_k']: specs[f'rl_{seed}_top{k}']=dict(kind='ranked',seed=seed,k=k)
     # The original portfolio pipeline has at most 1+24+64+64 evaluations.
     specs['local_reference']=dict(kind='local',seed=None,cap=1+config['tuned_candidates']+2*config['search_candidates'],seconds=None)
+    if g.get('ranking_only'):return specs
     for label,values in [('c',g['candidate_budgets']),('s',g['seconds_budgets'])]:
         for value in values:
             budget=dict(cap=value if label=='c' else None,seconds=value if label=='s' else None)
@@ -78,7 +81,17 @@ def find_model_run(results):
 
 def load_source(source,c):
     source=Path(source).resolve();m=read_json(source/'manifest.json')
-    if m.get('experiment')!='learning_v5':raise ValueError('SOURCE_RUN must be a v5 run folder, not an analysis ZIP')
+    if m.get('experiment')=='comparison_v7':
+        bundle=read_json(source/'comparison_policies.json')
+        if digest(bundle)!=m['bundle_sha256']:raise ValueError('Comparison policy bundle changed')
+        if bundle['feature_version']!=FEATURE_VERSION:raise ValueError('Feature version mismatch')
+        if c['seed'] in bundle['excluded_hardware_seeds']:raise ValueError('Use fresh comparison instances')
+        if c['learning']['penalties']!=bundle['source_config']['learning']['penalties']:raise ValueError('Objective changed')
+        if set(map(str,c['learning']['seeds']))!=set(bundle['actors']):raise ValueError('Retain all old and selected model seeds')
+        for name in ('learnedplacement/learning.py','learnedplacement/expanded.py','learnedplacement/metrics.py'):
+            if hashlib.sha256((ROOT/name).read_bytes()).hexdigest()!=m['sources'].get(name):raise ValueError('Incompatible model source')
+        return bundle
+    if m.get('experiment')!='learning_v5':raise ValueError('SOURCE_RUN must be a v5 run or frozen v7 comparison folder, not an analysis ZIP')
     for name in ('learnedplacement/learning.py','learnedplacement/expanded.py','learnedplacement/metrics.py'):
         if hashlib.sha256((ROOT/name).read_bytes()).hexdigest()!=m['sources'].get(name):
             raise ValueError('Source model uses incompatible simulator/features: '+name)
@@ -128,8 +141,8 @@ def prepare(c,output,source_run=None):
            cases=[s.workload.case_id for s in scenarios],methods=c['methods'],created_unix_s=time.time(),
            scenario_inputs_sha256=digest([s.to_dict() for s in scenarios]),frozen_policies_sha256=digest(bundle),
            model_hashes={seed:digest(actor) for seed,actor in bundle['actors'].items()},source_fingerprint=bundle['source_fingerprint'],
-           source_config=bundle['source_config'],method_specs=method_specs(c),
-           split_contract='Frozen existing v5 policies. Fresh hardware seed and planning/evaluation trace namespace. Validation and test run separately; all profiles share instance split. Larger sizes are extrapolation.',
+           source_config=bundle['source_config'],method_specs=method_specs(c),model_labels=bundle.get('model_labels',{}),
+           split_contract='Frozen source policies. Fresh hardware seed and planning/evaluation trace namespace. Validation and test run separately; all profiles share instance split. See source_config and model_labels for training sizes and selection provenance.',
            caveat='Synthetic simulator, not real training. Fixed 3 failure domains at all sizes. Budgeted search uses planning traces only. No guarantees of optimality or deadline/cost feasibility.')
     atomic_json(snapshot,bundle);atomic_json(output/'learning_summary.json',bundle['source_learning']);atomic_json(path,m)
     return m
@@ -222,12 +235,15 @@ class Experiment:
                 if spec.get('seed') is not None:
                     seed=spec['seed'];scores,_=self.models[seed].forward(matrix(s,pool))
                     indices=sorted(indices,key=lambda i:(-float(scores[i]),i));model_hash=digest(self.actors[str(seed)])
+                elif spec['kind']=='heuristic':
+                    from .ranking import heuristic_score
+                    indices=sorted(indices,key=lambda i:(heuristic_score(s,pool[i],c['learning']['penalties']),i))
                 elif spec['kind']=='random':
                     # Same permutation for k=4 and k=8 gives nested random controls.
                     random.Random(seed_for(c['seed'],s.workload.case_id,'random-subset')).shuffle(indices)
                 limits();fallback=pool[indices[0]]
                 if spec['kind']=='direct':ranked_indices=indices
-                elif spec['kind'] in ('pool','random','ranked'):
+                elif spec['kind'] in ('pool','random','ranked','heuristic'):
                     ranked_indices=indices[:spec.get('k',len(indices))]
                     for i in ranked_indices:evaluate(pool[i])
                 else:
@@ -378,7 +394,7 @@ def export(output):
                     intervals='Paired normal 95% intervals, not multiplicity corrected; hardware profiles are dependent.',
                     timing='Total measured planning, including initialization, features, proposals and resume overhead. Cold model load/shared trace generation excluded. Parallel CPU contention affects latency.',
                     budgets='Candidate budgets count unique fully evaluated plans across initialization and local search. Each uses planning_traces rollouts. Attempted simulations include interrupted work. Wall budgets can overshoot during indivisible operations.',
-                    scope='Synthetic workload; fixed three failure domains. Larger sizes extrapolate frozen small-instance policies. No guarantee of optimality or constraint satisfaction.'))
+                    scope='Synthetic workload; fixed three failure domains. Consult source_config/model_labels for each policy training distribution. No guarantee of optimality or constraint satisfaction.'))
     target=output.with_suffix('.analysis.zip');temp=target.with_suffix('.zip.tmp')
     with zipfile.ZipFile(temp,'w',zipfile.ZIP_DEFLATED,compresslevel=9) as z:z.writestr('analysis.json',json.dumps(bundle,separators=(',',':')))
     os.replace(temp,target);return target

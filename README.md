@@ -1,9 +1,10 @@
 # LearnedPlacement
 
 A local CPU simulator for resource, placement, checkpoint and recovery planning.
-**Pilot v6 reuses frozen v5 RL policies to guide search**, compares equal planning
-budgets and adds 32/64/96-machine pools. No Ray, cloud, GPU or solver is required.
-The workload is simulated; no new neural training occurs in v6.
+**Pilot v7 trains RL policies across small and large configurations**, validates
+saved checkpoints, compares three training settings and evaluates selected models
+against the original small-trained models and nonlearned baselines. Workloads are
+simulated; planner networks really train. No Ray, cloud, GPU or solver is required.
 
 ## Run locally
 
@@ -14,19 +15,22 @@ python -m pip install -e '.[notebook,learning]'
 python -m jupyter lab notebooks/PlacementPilot.ipynb
 ```
 
-Python 3.10+ is required. Restart the kernel after pulling. Set `SOURCE_RUN` to
-your completed v5 results folder (the analysis ZIP has no weights). Start with
-`STAGE="small"`, `SPLIT="validation"`, then use `STAGE="scale"`. New output names
-keep previous results intact. There is **no mandatory 30-minute limit**:
-`MAX_MINUTES=None` runs until completion. Four CPU case workers are the notebook
-default; worker count is editable. Rerun unchanged to resume.
+Python 3.10+ is required. Restart the kernel after pulling. The notebook has
+separate train/resume and evaluate/resume cells, four configurable CPU workers,
+and **no mandatory timeout** (`MAX_MINUTES=None`). Defaults: 3 settings × 3 seeds,
+checkpoints at 2,048/4,096/8,192/16,384 episodes and pools of 6/12/24/32/64/96
+machines. Validation chooses one setting/episode shared by all seeds. Test data
+is not used during tuning. The original reward is unchanged.
 
-See [the v6 design and limitations](docs/PILOT_V6.md) for methods, budgets,
-parallel timing, fresh splits and export details. The compact `.analysis.zip`
-contains only analysis inputs; raw data and frozen models remain local.
-`notebooks/PlacementPilotV5.ipynb` preserves the earlier training workflow. The
-v5 runner also accepts `max_minutes=None` or a value above 30 when called in
-Python; its archived notebook still explicitly requests 30 minutes by default.
+After training, set `SOURCE_RUN` to your completed original v5 results folder
+(the analysis ZIP has no weights). Run the fresh validation comparison with both
+model families, random/analytical top-eight baselines and full/local search.
+Share the two compact ZIPs from the export cell. See [the v7 design](docs/PILOT_V7.md)
+for exact budgets, source checks, selection rules and limitations.
+
+The earlier workflows remain in `notebooks/PlacementPilotV5.ipynb` and
+`notebooks/PlacementPilotV6.ipynb`. Original outputs are preserved. Source or
+configuration changes require a new run directory; rerun unchanged to resume.
 
 ## What v5 compares
 
